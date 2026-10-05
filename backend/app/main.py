@@ -9,13 +9,20 @@ from app.config import get_settings
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title="Shopee Seller Insights API", version="0.1.0")
+    public_docs = settings.app_env != "production"
+    app = FastAPI(
+        title="Shopee Seller Insights API",
+        version="0.2.0",
+        docs_url="/api/docs" if public_docs else None,
+        redoc_url=None,
+        openapi_url="/api/openapi.json" if public_docs else None,
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PATCH"],
-        allow_headers=["Authorization", "Content-Type"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
+        allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
     )
     app.include_router(auth.router)
     app.include_router(uploads.router)

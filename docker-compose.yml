@@ -33,13 +33,14 @@ services:
       MIGRATION_DATABASE_URL: postgresql+psycopg://ssi_owner:${POSTGRES_PASSWORD:-dev-only-insecure-owner-pw}@db:5432/shopee_insights
       JWT_SECRET: ${JWT_SECRET:-dev-only-insecure-jwt-secret-change-me-please}
       PII_HASH_SECRET: ${PII_HASH_SECRET:-dev-only-insecure-pii-secret-change-me-please}
-      CORS_ORIGINS: '["http://localhost:5173"]'
+      CORS_ORIGINS: '["http://localhost:8080"]'
+      # Trust X-Forwarded-For only from the nginx container (fixed IP below).
+      FORWARDED_ALLOW_IPS: 172.28.0.10
       # The local demo is plain http; production must keep Secure cookies (enforced).
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-    ports:
-      - "127.0.0.1:8000:8000"  # Swagger UI for local development only
+    # No published port: reachable only through nginx (Swagger at /api/docs).
     networks: [backend, frontend]
 
   web:
@@ -47,15 +48,18 @@ services:
     depends_on:
       api:
         condition: service_healthy
-    environment:
-      API_PROXY_TARGET: http://api:8000
     ports:
-      - "5173:5173"
-    networks: [frontend]
+      - "8080:8080"
+    networks:
+      frontend:
+        ipv4_address: 172.28.0.10
 
 networks:
   backend:
   frontend:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
 
 volumes:
   db-data:

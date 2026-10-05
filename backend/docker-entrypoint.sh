@@ -5,4 +5,7 @@ alembic upgrade head
 if [ "${SEED_DEMO_DATA:-false}" = "true" ]; then
   python -m app.seed
 fi
-exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+# Proxy headers are honored only from FORWARDED_ALLOW_IPS (the nginx container);
+# with the default 127.0.0.1 nothing external is trusted.
+exec uvicorn app.main:app --host 0.0.0.0 --port 8000 \
+  --proxy-headers --forwarded-allow-ips="${FORWARDED_ALLOW_IPS:-127.0.0.1}"

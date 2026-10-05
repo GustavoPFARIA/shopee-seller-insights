@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import jwt
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -161,3 +162,13 @@ def test_production_rejects_dev_secrets() -> None:
         app_env="production", jwt_secret="y" * 40, pii_hash_secret="x" * 40, cookie_secure=True
     )
     assert ok.app_env == "production"
+
+
+def test_docs_hidden_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.main import create_app
+
+    assert TestClient(create_app()).get("/api/docs").status_code == 200
+    monkeypatch.setattr(get_settings(), "app_env", "production")
+    prod = TestClient(create_app())
+    assert prod.get("/api/docs").status_code == 404
+    assert prod.get("/api/openapi.json").status_code == 404

@@ -28,7 +28,7 @@ class Settings(BaseSettings):
         default="America/Sao_Paulo", pattern=r"^[A-Za-z_]+(/[A-Za-z_+-]+)*$"
     )
 
-    cors_origins: list[str] = Field(default=["http://localhost:5173"])
+    cors_origins: list[str] = Field(default=["http://localhost:8080", "http://localhost:5173"])
 
     max_upload_mb: int = Field(default=5, ge=1, le=50)
     max_upload_rows: int = Field(default=50_000, ge=1)
