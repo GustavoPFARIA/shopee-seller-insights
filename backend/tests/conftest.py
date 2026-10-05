@@ -16,6 +16,7 @@ os.environ["MIGRATION_DATABASE_URL"] = TEST_DATABASE_URL
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-" + "x" * 32)
 os.environ.setdefault("PII_HASH_SECRET", "test-pii-secret-" + "y" * 32)
 os.environ["ANTHROPIC_API_KEY"] = ""
+os.environ["COOKIE_SECURE"] = "false"  # TestClient talks plain http
 
 import pytest  # noqa: E402
 from alembic.config import Config  # noqa: E402
@@ -46,7 +47,7 @@ def _clean_tables() -> Iterator[None]:
         conn.execute(
             text(
                 "TRUNCATE order_items, orders, uploads, products, users, sellers, "
-                "rate_limit_hits "
+                "rate_limit_hits, refresh_tokens "
                 "RESTART IDENTITY CASCADE"
             )
         )

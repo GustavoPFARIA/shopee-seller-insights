@@ -34,6 +34,8 @@ services:
       JWT_SECRET: ${JWT_SECRET:-dev-only-insecure-jwt-secret-change-me-please}
       PII_HASH_SECRET: ${PII_HASH_SECRET:-dev-only-insecure-pii-secret-change-me-please}
       CORS_ORIGINS: '["http://localhost:5173"]'
+      # The local demo is plain http; production must keep Secure cookies (enforced).
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
       SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     ports:

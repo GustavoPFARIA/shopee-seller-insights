@@ -166,3 +166,21 @@ class RateLimitHit(Base):
     key: Mapped[str] = mapped_column(String(64))
     window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     hits: Mapped[int] = mapped_column(Integer)
+
+
+class RefreshToken(Base):
+    """Opaque refresh token (stored only as SHA-256) with rotation families."""
+
+    __tablename__ = "refresh_tokens"
+    __table_args__ = (
+        CheckConstraint("expires_at > created_at", name="ck_refresh_tokens_expiry"),
+        Index("ix_refresh_tokens_family", "family_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    family_id: Mapped[str] = mapped_column(String(32))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

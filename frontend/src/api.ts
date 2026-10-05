@@ -1,7 +1,11 @@
-// Typed client for the FastAPI backend. The JWT lives in sessionStorage only
-// (cleared when the tab closes) and is sent as a Bearer header.
+// Typed client for the FastAPI backend.
+// The short-lived access token lives only in memory. The refresh token is an
+// HttpOnly cookie the page cannot read; /api/auth/refresh exchanges it for a new
+// access token (on page load and whenever a request gets a 401).
 
-const TOKEN_KEY = 'ssi_token'
+let accessToken: string | null = null
+let refreshing: Promise<boolean> | null = null
+const CSRF = { 'X-Requested-With': 'ssi' }
 
 export type Money = string
 
@@ -92,19 +96,40 @@ export class ApiError extends Error {
   }
 }
 
-export const getToken = () => sessionStorage.getItem(TOKEN_KEY)
-export const setToken = (token: string | null) =>
-  token ? sessionStorage.setItem(TOKEN_KEY, token) : sessionStorage.removeItem(TOKEN_KEY)
+/** Exchange the refresh cookie for a new access token. Concurrent callers share one call. */
+export function refreshSession(): Promise<boolean> {
+  refreshing ??= fetch('/api/auth/refresh', { method: 'POST', headers: CSRF })
+    .then(async (resp) => {
+      accessToken = resp.ok ? ((await resp.json()) as { access_token: string }).access_token : null
+      return resp.ok
+    })
+    .catch(() => false)
+    .finally(() => {
+      refreshing = null
+    })
+  return refreshing
+}
+
+async function send(path: string, init: RequestInit): Promise<Response> {
+  const headers = new Headers(init.headers)
+  if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
+  return fetch(path, { ...init, headers })
+}
+
+async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  let resp = await send(path, init)
+  if (resp.status === 401 && !path.startsWith('/api/auth/')) {
+    if (await refreshSession()) {
+      resp = await send(path, init)
+    } else {
+      window.dispatchEvent(new Event('ssi:logout'))
+    }
+  }
+  return resp
+}
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers)
-  const token = getToken()
-  if (token) headers.set('Authorization', `Bearer ${token}`)
-  const resp = await fetch(path, { ...init, headers })
-  if (resp.status === 401 && token) {
-    setToken(null)
-    window.dispatchEvent(new Event('ssi:logout'))
-  }
+  const resp = await authedFetch(path, init)
   if (!resp.ok) {
     let message = `Request failed (${resp.status})`
     let details: ApiError['details'] = []
@@ -117,6 +142,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     }
     throw new ApiError(resp.status, message, details)
   }
+  if (resp.status === 204) return undefined as T
   return resp.json() as Promise<T>
 }
 
@@ -126,7 +152,11 @@ export const api = {
   async login(email: string, password: string) {
     const body = new URLSearchParams({ username: email, password })
     const res = await request<{ access_token: string }>('/api/auth/login', { method: 'POST', body })
-    setToken(res.access_token)
+    accessToken = res.access_token
+  },
+  async logout() {
+    await fetch('/api/auth/logout', { method: 'POST', headers: CSRF }).catch(() => undefined)
+    accessToken = null
   },
   me: () => request<Me>('/api/auth/me'),
   overview: (p: Record<string, string>) => request<Overview>(`/api/metrics/overview?${qs(p)}`),
@@ -149,9 +179,7 @@ export const api = {
   },
   summary: () => request<AiSummary>('/api/summary/weekly'),
   async exportCsv(p: Record<string, string>) {
-    const resp = await fetch(`/api/metrics/products/export.csv?${qs(p)}`, {
-      headers: { Authorization: `Bearer ${getToken() ?? ''}` },
-    })
+    const resp = await authedFetch(`/api/metrics/products/export.csv?${qs(p)}`)
     if (!resp.ok) throw new ApiError(resp.status, 'Export failed')
     const url = URL.createObjectURL(await resp.blob())
     const a = document.createElement('a')

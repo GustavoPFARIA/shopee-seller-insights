@@ -16,7 +16,10 @@ class Settings(BaseSettings):
     )
     jwt_secret: SecretStr = Field(min_length=32)
     jwt_algorithm: str = "HS256"
-    access_token_minutes: int = Field(default=30, ge=1, le=24 * 60)
+    access_token_minutes: int = Field(default=15, ge=1, le=24 * 60)
+    refresh_token_days: int = Field(default=7, ge=1, le=90)
+    # Secure cookies require HTTPS; only disable for a local http:// demo.
+    cookie_secure: bool = True
     # Secret used to pseudonymize buyer identifiers (HMAC) on import.
     pii_hash_secret: SecretStr = Field(min_length=32)
 
@@ -45,6 +48,8 @@ class Settings(BaseSettings):
                 value: SecretStr = getattr(self, name)
                 if "dev-only" in value.get_secret_value():
                     raise ValueError(f"{name.upper()} uses a dev-only default in production")
+            if not self.cookie_secure:
+                raise ValueError("COOKIE_SECURE must be true in production")
         return self
 
 

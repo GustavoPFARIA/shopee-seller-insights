@@ -153,5 +153,11 @@ def test_production_rejects_dev_secrets() -> None:
             jwt_secret="dev-only-insecure-jwt-secret-change-me-please",
             pii_hash_secret="x" * 40,
         )
-    ok = Settings(app_env="production", jwt_secret="y" * 40, pii_hash_secret="x" * 40)
+    with pytest.raises(ValidationError, match="COOKIE_SECURE"):
+        Settings(
+            app_env="production", jwt_secret="y" * 40, pii_hash_secret="x" * 40, cookie_secure=False
+        )
+    ok = Settings(
+        app_env="production", jwt_secret="y" * 40, pii_hash_secret="x" * 40, cookie_secure=True
+    )
     assert ok.app_env == "production"

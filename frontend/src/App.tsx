@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, getToken, setToken, type Me } from './api'
+import { api, refreshSession, type Me } from './api'
 import Dashboard from './pages/Dashboard'
 import Login from './pages/Login'
 import ProductsPage from './pages/ProductsPage'
@@ -10,7 +10,7 @@ type Tab = 'dashboard' | 'upload' | 'products'
 export default function App() {
   const [me, setMe] = useState<Me | null>(null)
   const [tab, setTab] = useState<Tab>('dashboard')
-  const [checking, setChecking] = useState(Boolean(getToken()))
+  const [checking, setChecking] = useState(true)
 
   const loadMe = useCallback(() => {
     api
@@ -21,7 +21,8 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (getToken()) loadMe()
+    // Restore the session from the HttpOnly refresh cookie, if any.
+    refreshSession().then((ok) => (ok ? loadMe() : setChecking(false)))
     const onLogout = () => setMe(null)
     window.addEventListener('ssi:logout', onLogout)
     return () => window.removeEventListener('ssi:logout', onLogout)
@@ -42,8 +43,7 @@ export default function App() {
           ))}
           <button
             onClick={() => {
-              setToken(null)
-              setMe(null)
+              api.logout().finally(() => setMe(null))
             }}
           >
             Log out
