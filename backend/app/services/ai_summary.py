@@ -57,7 +57,7 @@ def weekly_facts(db: Session, seller_id: int, today: date) -> dict[str, Any]:
     ov = overview(db, seller_id, start, today)
     top = product_metrics(db, seller_id, start, today)[:5]
     abc = abc_curve(db, seller_id, start, today)
-    alerts = compute_alerts(db, seller_id, today=today, stalled_days=30, min_margin_pct=15.0)
+    alerts = compute_alerts(db, seller_id, today=today)  # the shop's own thresholds
     return {
         "period": {"start": str(start), "end": str(today)},
         "this_week": ov.current.model_dump(mode="json"),
@@ -75,7 +75,7 @@ def weekly_facts(db: Session, seller_id: int, today: date) -> dict[str, Any]:
         "abc_counts": {c: sum(1 for i in abc if i.abc_class == c) for c in ("A", "B", "C")},
         "alerts": {
             kind: [a.name for a in alerts if a.kind == kind][:5]
-            for kind in ("low_stock", "stalled_product", "low_margin")
+            for kind in ("low_stock", "stalled_product", "low_margin", "high_returns")
         },
     }
 

@@ -7,6 +7,7 @@ from sqlalchemy import delete, select
 
 from app.config import get_settings
 from app.deps import CurrentUser, DbSession, OwnerUser, rate_limit
+from app.mailer import MailError, send_email
 from app.models import Invitation, User
 from app.schemas import InvitationCreate, InvitationCreated, InvitationOut, MemberOut, MemberUpdate
 from app.services import members
@@ -71,12 +72,28 @@ def invite(body: InvitationCreate, owner: OwnerUser, db: DbSession) -> Invitatio
         )
     except members.MembershipError as exc:
         _raise(exc)
+    emailed = False
+    settings = get_settings()
+    if settings.email_enabled:
+        link = f"{settings.app_base_url.rstrip('/')}/#invite={token}"
+        try:
+            send_email(
+                [invitation.email],
+                f"You are invited to {owner.seller.name} on Shopee Seller Insights",
+                f"{owner.email} invited you to join {owner.seller.name} as {body.role}.\n\n"
+                f"Accept the invitation (valid for 72 hours, single use):\n{link}\n\n"
+                "If you did not expect this e-mail you can ignore it.",
+            )
+            emailed = True
+        except MailError:
+            emailed = False  # the owner can still copy the link from the response
     return InvitationCreated(
         id=invitation.id,
         email=invitation.email,
         role=body.role,
         expires_at=invitation.expires_at,
         token=token,
+        emailed=emailed,
     )
 
 

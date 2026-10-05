@@ -49,12 +49,26 @@ class Settings(BaseSettings):
     # Fernet key (urlsafe base64, 32 bytes) used to encrypt Shopee tokens at rest.
     token_encryption_key: SecretStr | None = None
 
+    # E-mail (optional): invitations and the weekly digest. Off unless SMTP_HOST is set.
+    smtp_host: str | None = None
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_username: str | None = None
+    smtp_password: SecretStr | None = None
+    smtp_from: str = "Shopee Seller Insights <no-reply@localhost>"
+    # "starttls" (port 587), "ssl" (port 465) or "none" (local test servers only).
+    smtp_security: Literal["starttls", "ssl", "none"] = "starttls"
+    # Public URL of the web app, used to build links in e-mails.
+    app_base_url: str = "http://localhost:8080"
+
     anthropic_api_key: SecretStr | None = None
     anthropic_model: str = "claude-haiku-4-5"
 
     @field_validator(
         "shopee_partner_id",
         "shopee_partner_key",
+        "smtp_host",
+        "smtp_username",
+        "smtp_password",
         "token_encryption_key",
         "anthropic_api_key",
         mode="before",
@@ -76,7 +90,13 @@ class Settings(BaseSettings):
                 raise ValueError("TOKEN_ENCRYPTION_KEY uses a dev-only default in production")
             if not self.cookie_secure:
                 raise ValueError("COOKIE_SECURE must be true in production")
+            if self.smtp_host and self.smtp_security == "none":
+                raise ValueError("SMTP_SECURITY=none is not allowed in production")
         return self
+
+    @property
+    def email_enabled(self) -> bool:
+        return bool(self.smtp_host)
 
     @property
     def shopee_enabled(self) -> bool:

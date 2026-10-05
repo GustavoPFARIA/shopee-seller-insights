@@ -177,6 +177,8 @@ class InvitationOut(BaseModel):
 class InvitationCreated(InvitationOut):
     # Shown once to the owner; only its hash is stored.
     token: str
+    # True when the invite link was also e-mailed to the invitee (SMTP configured).
+    emailed: bool = False
 
 
 class AcceptInvitation(BaseModel):
@@ -217,6 +219,8 @@ class ShopSettings(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     name: str
+    # Read-only: whether the server can send e-mail at all.
+    email_available: bool = False
     stalled_days: int
     min_margin_pct: Decimal
     max_return_rate_pct: Decimal

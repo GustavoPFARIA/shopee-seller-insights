@@ -2,26 +2,21 @@
 
 import csv
 import io
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Annotated
-from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 
-from app.config import get_settings
 from app.csv_safety import safe_cell
 from app.deps import CurrentUser, DbSession
 from app.schemas import AbcItem, DailyPoint, OverviewResponse, ProductMetrics
 from app.services import metrics
+from app.timeutil import today_local
 
 router = APIRouter(prefix="/api/metrics", tags=["metrics"])
 
 MAX_PERIOD_DAYS = 366
-
-
-def today_local() -> date:
-    return datetime.now(ZoneInfo(get_settings().report_timezone)).date()
 
 
 class Period:

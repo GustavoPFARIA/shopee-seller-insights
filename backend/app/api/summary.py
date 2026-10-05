@@ -4,11 +4,11 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.metrics import today_local
 from app.config import get_settings
 from app.deps import DbSession, EditorUser, rate_limit
 from app.schemas import AiSummaryResponse
 from app.services import ai_summary
+from app.timeutil import today_local
 
 router = APIRouter(prefix="/api/summary", tags=["ai"])
 

@@ -15,6 +15,14 @@ x-app-env: &app-env
   SHOPEE_REDIRECT_URL: ${SHOPEE_REDIRECT_URL:-http://localhost:8080/api/shopee/callback}
   SHOPEE_SYNC_INTERVAL_MINUTES: ${SHOPEE_SYNC_INTERVAL_MINUTES:-30}
   TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
+  # E-mail (optional): invitations and the weekly digest.
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USERNAME: ${SMTP_USERNAME:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_FROM: ${SMTP_FROM:-Shopee Seller Insights <no-reply@localhost>}
+  SMTP_SECURITY: ${SMTP_SECURITY:-starttls}
+  APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8080}
 
 services:
   db:

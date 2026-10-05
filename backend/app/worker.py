@@ -26,10 +26,13 @@ from app.integrations import shopee_sync
 from app.integrations.shopee_client import ShopeeClient
 from app.logging_setup import configure_logging
 from app.models import ShopeeConnection, SyncRun
+from app.services import digest
+from app.timeutil import today_local
 
 log = logging.getLogger("app.worker")
 
 QUEUE_POLL_SECONDS = 15
+DIGEST_CHECK_SECONDS = 3600
 # Touched on every loop iteration; the container healthcheck fails if it gets old,
 # so a hung worker is reported unhealthy (see `python -m app.worker --healthcheck`).
 HEARTBEAT_FILE = Path(os.environ.get("WORKER_HEARTBEAT_FILE", "/tmp/ssi-worker-heartbeat"))  # noqa: S108
@@ -115,6 +118,16 @@ def process_queue(client: ShopeeClient | None = None) -> int:
             done += 1
 
 
+def run_digests() -> int:
+    """Send the weekly e-mail digests that are due (no-op without SMTP)."""
+    try:
+        with get_sessionmaker()() as db:
+            return digest.send_due_digests(db, today_local())
+    except Exception:  # a digest problem must never stop the worker
+        log.exception("weekly digest run failed")
+        return 0
+
+
 def run_cycle() -> dict[str, int]:
     """Scheduled sync of all connected shops; returns counters for logging/tests."""
     stats = {"synced": 0, "busy": 0, "failed": 0, "reauth": 0}
@@ -162,9 +175,13 @@ def main() -> None:
     interval = settings.shopee_sync_interval_minutes * 60
     next_cycle = 0.0
     if not settings.shopee_enabled:
-        log.info("Shopee integration not configured; worker idle")
+        log.info("Shopee integration not configured; only e-mail digests will run")
+    next_digest_check = 0.0
     while not stop.is_set():
         beat()
+        if time.monotonic() >= next_digest_check:
+            run_digests()
+            next_digest_check = time.monotonic() + DIGEST_CHECK_SECONDS
         if settings.shopee_enabled:
             if (ran := process_queue()) > 0:
                 log.info("queued syncs done: %s", ran)

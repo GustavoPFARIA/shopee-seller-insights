@@ -28,6 +28,7 @@ def test_default_settings(client: TestClient, auth_headers: dict[str, str]) -> N
     body = client.get("/api/settings", headers=auth_headers).json()
     assert body == {
         "name": "Shop A",
+        "email_available": False,
         "stalled_days": 30,
         "min_margin_pct": "15.00",
         "max_return_rate_pct": "10.00",

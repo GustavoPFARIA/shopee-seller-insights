@@ -4,10 +4,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query
 
-from app.api.metrics import today_local
 from app.deps import CurrentUser, DbSession
 from app.schemas import Alert
 from app.services.alerts import compute_alerts
+from app.timeutil import today_local
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 
