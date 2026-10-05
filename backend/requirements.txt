@@ -12,3 +12,4 @@ PyJWT==2.15.1
 argon2-cffi==25.1.0
 python-multipart==0.0.32
 anthropic==1.11.0
+tzdata==2026.5

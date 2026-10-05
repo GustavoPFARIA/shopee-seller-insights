@@ -4,7 +4,7 @@ import csv
 import io
 from datetime import date, datetime, timedelta
 from typing import Annotated
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
@@ -20,11 +20,8 @@ MAX_PERIOD_DAYS = 366
 FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
 
-def _today() -> date:
-    try:
-        return datetime.now(ZoneInfo(get_settings().report_timezone)).date()
-    except ZoneInfoNotFoundError:  # slim images may lack tzdata; UTC is close enough
-        return datetime.now().astimezone().date()
+def today_local() -> date:
+    return datetime.now(ZoneInfo(get_settings().report_timezone)).date()
 
 
 class Period:
@@ -33,7 +30,7 @@ class Period:
         start: Annotated[date | None, Query()] = None,
         end: Annotated[date | None, Query()] = None,
     ) -> None:
-        self.end = end or _today()
+        self.end = end or today_local()
         self.start = start or self.end - timedelta(days=29)
         if self.start > self.end:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "start must be <= end")
