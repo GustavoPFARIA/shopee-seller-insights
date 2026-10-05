@@ -171,3 +171,6 @@ def test_order_row_rejects_bad_identifiers() -> None:
 def test_brazilian_day_first_dates() -> None:
     row = ROW.replace("2025-09-01 10:30", "02/09/2025 10:30")
     assert parse_file(_csv(row), "x.csv", max_rows=10)[0].ordered_at.month == 9
+    bad = ROW.replace("2025-09-01 10:30", "31/31/2025")
+    with pytest.raises(ImportValidationError):
+        parse_file(_csv(bad), "x.csv", max_rows=10)

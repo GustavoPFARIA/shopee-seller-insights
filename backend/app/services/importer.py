@@ -109,11 +109,26 @@ def _parse_status(value: object) -> str:
     return status
 
 
+BR_DATE_FORMATS = ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y")
+
+
 def _parse_datetime(value: object) -> datetime:
-    parsed = pd.to_datetime(str(value).strip(), errors="coerce", dayfirst=True)
-    if pd.isna(parsed):
-        raise ValueError(f"invalid date: {value!r}")
-    dt: datetime = parsed.to_pydatetime()
+    """Parse ISO ('2025-09-01 10:30') or Brazilian ('01/09/2025 10:30') dates to UTC."""
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        text = str(value).strip()
+        try:
+            dt = datetime.fromisoformat(text)
+        except ValueError:
+            for fmt in BR_DATE_FORMATS:
+                try:
+                    dt = datetime.strptime(text, fmt)
+                    break
+                except ValueError:
+                    continue
+            else:
+                raise ValueError(f"invalid date: {value!r}") from None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=SHOPEE_BR_TZ)
     return dt.astimezone(UTC)
