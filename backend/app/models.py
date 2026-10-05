@@ -4,12 +4,13 @@ Money is always stored as NUMERIC(12, 2) and handled as Decimal in Python.
 All timestamps are timezone-aware and stored in UTC.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -32,12 +33,30 @@ def utcnow() -> datetime:
 
 
 class Seller(Base):
+    """A shop. Its alert thresholds and notification preferences live here (1:1)."""
+
     __tablename__ = "sellers"
+    __table_args__ = (
+        CheckConstraint("stalled_days BETWEEN 1 AND 365", name="ck_sellers_stalled_days"),
+        CheckConstraint("min_margin_pct BETWEEN -100 AND 100", name="ck_sellers_min_margin"),
+        CheckConstraint("max_return_rate_pct BETWEEN 0 AND 100", name="ck_sellers_max_return_rate"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
     shop_code: Mapped[str] = mapped_column(String(64), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Alert thresholds (editable in Settings).
+    stalled_days: Mapped[int] = mapped_column(Integer, default=30, server_default="30")
+    min_margin_pct: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), default=Decimal("15"), server_default="15"
+    )
+    max_return_rate_pct: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), default=Decimal("10"), server_default="10"
+    )
+    # Send the weekly summary to owners and managers by e-mail (needs SMTP).
+    weekly_email: Mapped[bool] = mapped_column(default=False, server_default="false")
+    last_digest_sent_on: Mapped[date | None] = mapped_column(Date)
 
 
 ROLES = ("owner", "manager", "viewer")

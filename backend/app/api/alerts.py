@@ -16,9 +16,10 @@ router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 def get_alerts(
     user: CurrentUser,
     db: DbSession,
-    stalled_days: Annotated[int, Query(ge=1, le=365)] = 30,
-    min_margin_pct: Annotated[float, Query(ge=-100, le=100)] = 15.0,
+    stalled_days: Annotated[int | None, Query(ge=1, le=365)] = None,
+    min_margin_pct: Annotated[float | None, Query(ge=-100, le=100)] = None,
 ) -> list[Alert]:
+    """Alerts using the shop's saved thresholds; query parameters override them."""
     return compute_alerts(
         db,
         user.seller_id,

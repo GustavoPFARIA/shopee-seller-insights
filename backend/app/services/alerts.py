@@ -5,12 +5,14 @@ from datetime import date, timedelta
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.models import Order, OrderItem, Product
+from app.models import Order, OrderItem, Product, Seller
 from app.schemas import Alert
 from app.services.importer import NON_REVENUE_STATUSES
 from app.services.metrics import local_day, product_metrics
 
 MARGIN_WINDOW_DAYS = 30
+# Ignore return rates computed from one or two returns (too noisy to act on).
+MIN_RETURNS_FOR_ALERT = 2
 
 
 def compute_alerts(
@@ -18,9 +20,20 @@ def compute_alerts(
     seller_id: int,
     *,
     today: date,
-    stalled_days: int,
-    min_margin_pct: float,
+    stalled_days: int | None = None,
+    min_margin_pct: float | None = None,
+    max_return_rate_pct: float | None = None,
 ) -> list[Alert]:
+    """Alerts for one shop. Thresholds default to the shop's saved settings."""
+    seller = db.get(Seller, seller_id)
+    if seller is None:
+        return []
+    if stalled_days is None:
+        stalled_days = seller.stalled_days
+    if min_margin_pct is None:
+        min_margin_pct = float(seller.min_margin_pct)
+    if max_return_rate_pct is None:
+        max_return_rate_pct = float(seller.max_return_rate_pct)
     alerts: list[Alert] = []
 
     low_stock = db.scalars(
@@ -77,6 +90,24 @@ def compute_alerts(
 
     window_start = today - timedelta(days=MARGIN_WINDOW_DAYS - 1)
     for m in product_metrics(db, seller_id, window_start, today):
+        if (
+            m.return_rate_pct is not None
+            and m.returned_units >= MIN_RETURNS_FOR_ALERT
+            and m.return_rate_pct > max_return_rate_pct
+        ):
+            alerts.append(
+                Alert(
+                    kind="high_returns",
+                    product_id=m.product_id,
+                    sku=m.sku,
+                    name=m.name,
+                    message=(
+                        f"{m.return_rate_pct:.1f}% of shipped units returned in the last "
+                        f"{MARGIN_WINDOW_DAYS} days ({m.returned_units} units; "
+                        f"maximum {max_return_rate_pct:.1f}%)."
+                    ),
+                )
+            )
         if m.margin_pct is not None and m.margin_pct < min_margin_pct:
             alerts.append(
                 Alert(

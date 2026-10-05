@@ -109,6 +109,10 @@ class ProductMetrics(BaseModel):
     product_cost: Decimal | None
     margin: Decimal | None
     margin_pct: float | None
+    returned_units: int = 0
+    cancelled_units: int = 0
+    # Returned / (kept + returned) units in the period, in %.
+    return_rate_pct: float | None = None
 
 
 class AbcItem(BaseModel):
@@ -122,7 +126,7 @@ class AbcItem(BaseModel):
 
 
 class Alert(BaseModel):
-    kind: Literal["low_stock", "stalled_product", "low_margin"]
+    kind: Literal["low_stock", "stalled_product", "low_margin", "high_returns"]
     product_id: int
     sku: str
     name: str
@@ -207,3 +211,21 @@ class ShopeeStatus(BaseModel):
 
 class AuthorizationUrl(BaseModel):
     authorization_url: str
+
+
+class ShopSettings(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str
+    stalled_days: int
+    min_margin_pct: Decimal
+    max_return_rate_pct: Decimal
+    weekly_email: bool
+
+
+class ShopSettingsUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=120)
+    stalled_days: int | None = Field(default=None, ge=1, le=365)
+    min_margin_pct: Decimal | None = Field(default=None, ge=-100, le=100, decimal_places=2)
+    max_return_rate_pct: Decimal | None = Field(default=None, ge=0, le=100, decimal_places=2)
+    weekly_email: bool | None = None

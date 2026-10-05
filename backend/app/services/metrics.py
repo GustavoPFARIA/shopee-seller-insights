@@ -31,8 +31,10 @@ def _local_midnight(day: date) -> ColumnElement[datetime]:
     return func.timezone(get_settings().report_timezone, cast(literal(day), DateTime))
 
 
-def _revenue_items(seller_id: int, start: date, end: date) -> Select[OrderItem]:
-    """Base filter shared by every metric: seller scope, revenue statuses, period.
+def _items(
+    seller_id: int, start: date, end: date, status_filter: ColumnElement[bool]
+) -> Select[OrderItem]:
+    """Items of one seller's orders placed in [start, end] (local days) matching a status filter.
 
     The period is a half-open UTC range [local midnight of start, local midnight of
     end + 1). Comparing the raw column (instead of converting every row to a local
@@ -45,11 +47,16 @@ def _revenue_items(seller_id: int, start: date, end: date) -> Select[OrderItem]:
         .where(
             Order.seller_id == seller_id,
             Product.seller_id == seller_id,  # defense in depth
-            Order.status.not_in(NON_REVENUE_STATUSES),
+            status_filter,
             Order.ordered_at >= _local_midnight(start),
             Order.ordered_at < _local_midnight(end + timedelta(days=1)),
         )
     )
+
+
+def _revenue_items(seller_id: int, start: date, end: date) -> Select[OrderItem]:
+    """Items that generate revenue (not cancelled, unpaid or returned)."""
+    return _items(seller_id, start, end, Order.status.not_in(NON_REVENUE_STATUSES))
 
 
 GROSS = OrderItem.quantity * OrderItem.unit_price
@@ -146,6 +153,7 @@ def product_metrics(db: Session, seller_id: int, start: date, end: date) -> list
         .group_by(Product.id)
         .order_by(func.sum(GROSS).desc(), Product.sku)
     )
+    lost = _lost_units(db, seller_id, start, end)
     result: list[ProductMetrics] = []
     for (
         pid,
@@ -160,6 +168,7 @@ def product_metrics(db: Session, seller_id: int, start: date, end: date) -> list
         voucher,
     ) in db.execute(stmt):
         revenue = Decimal(gross).quantize(CENT)
+        returned, cancelled = lost.pop(pid, (0, 0))
         fees = commission + service + shipping + voucher
         cost = (unit_cost * units).quantize(CENT) if unit_cost is not None else None
         margin = (revenue - fees - cost).quantize(CENT) if cost is not None else None
@@ -181,9 +190,64 @@ def product_metrics(db: Session, seller_id: int, start: date, end: date) -> list
                     if margin is not None and revenue > 0
                     else None
                 ),
+                returned_units=returned,
+                cancelled_units=cancelled,
+                return_rate_pct=_return_rate(int(units), returned),
             )
         )
+    # Products whose every unit in the period was returned or cancelled.
+    if lost:
+        names = {
+            p.id: p
+            for p in db.scalars(
+                select(Product).where(Product.seller_id == seller_id, Product.id.in_(lost))
+            )
+        }
+        for pid, (returned, cancelled) in lost.items():
+            result.append(
+                ProductMetrics(
+                    product_id=pid,
+                    sku=names[pid].sku,
+                    name=names[pid].name,
+                    units=0,
+                    revenue=ZERO,
+                    commission_fee=ZERO,
+                    service_fee=ZERO,
+                    shipping_fee=ZERO,
+                    voucher=ZERO,
+                    product_cost=None,
+                    margin=None,
+                    margin_pct=None,
+                    returned_units=returned,
+                    cancelled_units=cancelled,
+                    return_rate_pct=_return_rate(0, returned),
+                )
+            )
     return result
+
+
+def _return_rate(sold_units: int, returned_units: int) -> float | None:
+    """Returned units / (kept + returned units), in %. None when nothing was shipped."""
+    shipped = sold_units + returned_units
+    return round(returned_units / shipped * 100, 2) if shipped else None
+
+
+def _lost_units(db: Session, seller_id: int, start: date, end: date) -> dict[int, tuple[int, int]]:
+    """(returned units, cancelled units) per product for orders placed in the period."""
+    stmt = (
+        _items(seller_id, start, end, Order.status.in_(("returned", "cancelled")))
+        .with_only_columns(OrderItem.product_id, Order.status, func.sum(OrderItem.quantity))
+        .group_by(OrderItem.product_id, Order.status)
+    )
+    lost: dict[int, tuple[int, int]] = {}
+    for pid, status, units in db.execute(stmt):
+        returned, cancelled = lost.get(pid, (0, 0))
+        if status == "returned":
+            returned += int(units)
+        else:
+            cancelled += int(units)
+        lost[pid] = (returned, cancelled)
+    return lost
 
 
 def classify_abc(
