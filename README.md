@@ -539,6 +539,11 @@ Next:
 3. Validation of the integration against a live Shopee shop (it is built and tested
    against the documented API and a faithful fake, see SECURITY.md).
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md), the [Code of Conduct](CODE_OF_CONDUCT.md) and the
+[CHANGELOG](CHANGELOG.md).
+
 ## License
 
 MIT, see [LICENSE](LICENSE).
