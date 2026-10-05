@@ -28,6 +28,7 @@ from app.services.importer import import_orders, parse_file
 DEMO_EMAIL = "demo@shopee-insights.dev"
 DEMO_PASSWORD = "DemoPassword123!"  # noqa: S105 (public demo account, documented in README)
 SECOND_EMAIL = "other@shopee-insights.dev"
+VIEWER_EMAIL = "viewer@shopee-insights.dev"
 
 HEADER = [
     "ID do pedido",
@@ -180,6 +181,16 @@ def _get_or_create_user(db: Session, email: str, shop: str, code: str) -> User:
 def seed(db: Session, days: int = 120, today: date | None = None) -> dict[str, int]:
     today = today or date.today()
     user = _get_or_create_user(db, DEMO_EMAIL, "Demo Gadgets Store", "demo-gadgets")
+    if db.scalar(select(User.id).where(User.email == VIEWER_EMAIL)) is None:
+        db.add(
+            User(
+                seller_id=user.seller_id,
+                email=VIEWER_EMAIL,
+                password_hash=hash_password(DEMO_PASSWORD),
+                role="viewer",
+            )
+        )
+        db.commit()
     # Dates are relative to "today": re-seeding on another day would create new fake
     # orders, so the demo is loaded only once.
     if db.scalar(select(Order.id).where(Order.seller_id == user.seller_id).limit(1)):
@@ -230,7 +241,8 @@ def main() -> None:
     with get_sessionmaker()() as db:
         result = seed(db, days=args.days)
     print(f"Seed complete: {result['orders_created']} new orders ({result['rows']} rows).")
-    print(f"Demo login: {DEMO_EMAIL} / {DEMO_PASSWORD}")
+    print(f"Demo login: {DEMO_EMAIL} / {DEMO_PASSWORD} (owner)")
+    print(f"Read-only demo login: {VIEWER_EMAIL} / {DEMO_PASSWORD} (viewer)")
 
 
 if __name__ == "__main__":  # pragma: no cover

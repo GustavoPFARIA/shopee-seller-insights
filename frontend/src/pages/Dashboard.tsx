@@ -54,7 +54,7 @@ function Kpi({ label, value, delta }: { label: string; value: string; delta?: nu
   )
 }
 
-export default function Dashboard() {
+export default function Dashboard({ canEdit }: { canEdit: boolean }) {
   const [range, setRange] = useState({ start: daysAgo(29), end: daysAgo(0) })
   const [overview, setOverview] = useState<Overview | null>(null)
   const [daily, setDaily] = useState<DailyPoint[]>([])
@@ -213,6 +213,7 @@ export default function Dashboard() {
             </ul>
           )}
         </div>
+        {canEdit && (
         <div className="card">
           <h2>Weekly AI summary</h2>
           <p className="muted">
@@ -226,6 +227,7 @@ export default function Dashboard() {
           )}
           {summary?.summary && <p className="summary">{summary.summary}</p>}
         </div>
+        )}
       </div>
 
       <div className="card">

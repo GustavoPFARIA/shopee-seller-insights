@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import alerts, auth, metrics, products, summary, uploads
+from app.api import alerts, auth, members, metrics, products, summary, uploads
 from app.config import get_settings
 
 
@@ -30,6 +30,7 @@ def create_app() -> FastAPI:
     app.include_router(metrics.router)
     app.include_router(alerts.router)
     app.include_router(summary.router)
+    app.include_router(members.router)
 
     @app.get("/api/health", tags=["health"])
     def health() -> dict[str, str]:

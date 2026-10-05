@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import seed as seed_module
-from app.models import Order, Product, Seller
+from app.models import Order, Product, Seller, User
 from app.services.alerts import compute_alerts
 from app.services.importer import parse_file
 from app.services.metrics import abc_curve
@@ -28,6 +28,8 @@ def test_seed_is_idempotent_and_realistic(db: Session) -> None:
     second = seed_module.seed(db, days=60, today=TODAY)
     assert second["orders_created"] == 0
     assert db.scalar(select(func.count()).select_from(Seller)) == 2
+    viewer = db.scalar(select(User).where(User.email == seed_module.VIEWER_EMAIL))
+    assert viewer is not None and viewer.role == "viewer"
 
     demo_seller = db.scalar(select(Seller.id).where(Seller.shop_code == "demo-gadgets"))
     assert demo_seller is not None

@@ -50,3 +50,22 @@ def rate_limit(
             )
 
     return dependency
+
+
+def require_role(*roles: str) -> Callable[[User], User]:
+    """Dependency factory: the current user must have one of `roles` in their shop."""
+
+    def dependency(user: CurrentUser) -> User:
+        if user.role not in roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your role does not allow this action",
+            )
+        return user
+
+    return dependency
+
+
+# Owners and managers can change data; viewers are read-only.
+EditorUser = Annotated[User, Depends(require_role("owner", "manager"))]
+OwnerUser = Annotated[User, Depends(require_role("owner"))]

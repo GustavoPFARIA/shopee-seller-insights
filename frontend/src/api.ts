@@ -82,10 +82,25 @@ export interface CatalogImportResult {
   created: number
   unchanged: number
 }
+export type Role = 'owner' | 'manager' | 'viewer'
 export interface Me {
   email: string
   seller_id: number
   shop_name: string
+  role: Role
+}
+export interface Member {
+  id: number
+  email: string
+  role: Role
+  created_at: string
+}
+export interface Invitation {
+  id: number
+  email: string
+  role: Role
+  expires_at: string
+  token?: string
 }
 export interface AiSummary {
   enabled: boolean
@@ -176,6 +191,31 @@ export const api = {
     accessToken = null
   },
   me: () => request<Me>('/api/auth/me'),
+  async acceptInvite(token: string, password: string) {
+    const res = await request<{ access_token: string }>('/api/auth/accept-invite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, password }),
+    })
+    accessToken = res.access_token
+  },
+  members: () => request<Member[]>('/api/members'),
+  invitations: () => request<Invitation[]>('/api/members/invitations'),
+  invite: (email: string, role: Role) =>
+    request<Invitation>('/api/members/invitations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, role }),
+    }),
+  revokeInvitation: (id: number) =>
+    request<void>(`/api/members/invitations/${id}`, { method: 'DELETE' }),
+  setRole: (id: number, role: Role) =>
+    request<Member>(`/api/members/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role }),
+    }),
+  removeMember: (id: number) => request<void>(`/api/members/${id}`, { method: 'DELETE' }),
   overview: (p: Record<string, string>) => request<Overview>(`/api/metrics/overview?${qs(p)}`),
   daily: (p: Record<string, string>) => request<DailyPoint[]>(`/api/metrics/daily?${qs(p)}`),
   products: (p: Record<string, string>) =>

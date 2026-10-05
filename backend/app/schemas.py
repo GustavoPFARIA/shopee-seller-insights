@@ -18,10 +18,14 @@ class TokenResponse(BaseModel):
     token_type: Literal["bearer"] = "bearer"  # noqa: S105
 
 
+Role = Literal["owner", "manager", "viewer"]
+
+
 class MeResponse(BaseModel):
     email: str
     seller_id: int
     shop_name: str
+    role: Role
 
 
 class ProductOut(BaseModel):
@@ -137,3 +141,40 @@ class CatalogImportResultOut(BaseModel):
     updated: int
     created: int
     unchanged: int
+
+
+class MemberOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    email: str
+    role: Role
+    created_at: datetime
+
+
+class MemberUpdate(BaseModel):
+    role: Role
+
+
+class InvitationCreate(BaseModel):
+    email: EmailStr
+    role: Role
+
+
+class InvitationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    email: str
+    role: Role
+    expires_at: datetime
+
+
+class InvitationCreated(InvitationOut):
+    # Shown once to the owner; only its hash is stored.
+    token: str
+
+
+class AcceptInvitation(BaseModel):
+    token: str = Field(min_length=20, max_length=200)
+    password: str = Field(min_length=10, max_length=128)

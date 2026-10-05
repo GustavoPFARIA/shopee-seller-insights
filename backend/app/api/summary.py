@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.metrics import today_local
 from app.config import get_settings
-from app.deps import CurrentUser, DbSession, rate_limit
+from app.deps import DbSession, EditorUser, rate_limit
 from app.schemas import AiSummaryResponse
 from app.services import ai_summary
 
@@ -20,7 +20,7 @@ summary_limit = rate_limit(
 
 
 @router.get("/weekly", response_model=AiSummaryResponse, dependencies=[Depends(summary_limit)])
-def weekly_summary(user: CurrentUser, db: DbSession) -> AiSummaryResponse:
+def weekly_summary(user: EditorUser, db: DbSession) -> AiSummaryResponse:
     if not ai_summary.ai_enabled():
         return AiSummaryResponse(enabled=False, summary=None, facts=None)
     facts: dict[str, Any] = ai_summary.weekly_facts(db, user.seller_id, today_local())

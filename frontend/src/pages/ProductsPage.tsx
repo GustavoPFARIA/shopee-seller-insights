@@ -2,7 +2,15 @@ import { useEffect, useState } from 'react'
 import { api, ApiError, type Product } from '../api'
 import ErrorDetails from '../components/ErrorDetails'
 
-function ProductRow({ product, onSaved }: { product: Product; onSaved: (p: Product) => void }) {
+function ProductRow({
+  product,
+  onSaved,
+  canEdit,
+}: {
+  product: Product
+  onSaved: (p: Product) => void
+  canEdit: boolean
+}) {
   const [cost, setCost] = useState(product.unit_cost ?? '')
   const [stock, setStock] = useState(product.stock_quantity?.toString() ?? '')
   const [threshold, setThreshold] = useState(product.low_stock_threshold.toString())
@@ -26,17 +34,21 @@ function ProductRow({ product, onSaved }: { product: Product; onSaved: (p: Produ
   return (
     <tr>
       <td>{product.name} <span className="muted">{product.sku}</span></td>
-      <td><input type="number" min="0" step="0.01" value={cost} placeholder="not set" onChange={(e) => setCost(e.target.value)} style={{ width: 100 }} /></td>
-      <td><input type="number" min="0" step="1" value={stock} placeholder="not tracked" onChange={(e) => setStock(e.target.value)} style={{ width: 100 }} /></td>
-      <td><input type="number" min="0" step="1" value={threshold} onChange={(e) => setThreshold(e.target.value)} style={{ width: 80 }} /></td>
+      <td><input type="number" min="0" step="0.01" value={cost} placeholder="not set" disabled={!canEdit} onChange={(e) => setCost(e.target.value)} style={{ width: 100 }} /></td>
+      <td><input type="number" min="0" step="1" value={stock} placeholder="not tracked" disabled={!canEdit} onChange={(e) => setStock(e.target.value)} style={{ width: 100 }} /></td>
+      <td><input type="number" min="0" step="1" value={threshold} disabled={!canEdit} onChange={(e) => setThreshold(e.target.value)} style={{ width: 80 }} /></td>
       <td>
-        <button className="secondary" onClick={save}>Save</button> <span className="muted">{status}</span>
+        {canEdit && (
+          <>
+            <button className="secondary" onClick={save}>Save</button> <span className="muted">{status}</span>
+          </>
+        )}
       </td>
     </tr>
   )
 }
 
-export default function ProductsPage() {
+export default function ProductsPage({ canEdit }: { canEdit: boolean }) {
   const [products, setProducts] = useState<Product[]>([])
   const [error, setError] = useState<string | null>(null)
   const [importError, setImportError] = useState<ApiError | null>(null)
@@ -83,6 +95,7 @@ export default function ProductsPage() {
         <button className="secondary" onClick={() => api.downloadCatalog()}>
           Download spreadsheet
         </button>
+        {canEdit && (
         <label className="secondary file-button">
           {busy ? 'Importing…' : 'Import spreadsheet'}
           <input
@@ -96,7 +109,10 @@ export default function ProductsPage() {
             }}
           />
         </label>
-        <span className="muted">Download, fill in cost and stock, upload. Empty cells are left unchanged.</span>
+        )}
+        {canEdit && (
+          <span className="muted">Download, fill in cost and stock, upload. Empty cells are left unchanged.</span>
+        )}
       </div>
       {importMsg && <p>{importMsg}</p>}
       {importError && <ErrorDetails error={importError} />}
@@ -117,6 +133,7 @@ export default function ProductsPage() {
               <ProductRow
                 key={`${p.id}-${version}`}
                 product={p}
+                canEdit={canEdit}
                 onSaved={(saved) => setProducts((all) => all.map((x) => (x.id === saved.id ? saved : x)))}
               />
             ))}

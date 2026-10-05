@@ -12,9 +12,9 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.deps import CurrentUser, DbSession, rate_limit
 from app.models import Seller, User
-from app.schemas import MeResponse, RegisterRequest, TokenResponse
+from app.schemas import AcceptInvitation, MeResponse, RegisterRequest, TokenResponse
 from app.security import create_access_token, hash_password, verify_password
-from app.services import sessions
+from app.services import members, sessions
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -83,7 +83,9 @@ def register(body: RegisterRequest, db: DbSession, response: Response) -> TokenR
     if db.scalar(select(User.id).where(User.email == email)) is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "E-mail already registered")
     seller = Seller(name=body.shop_name, shop_code=_shop_code(body.shop_name))
-    user = User(seller=seller, email=email, password_hash=hash_password(body.password))
+    user = User(
+        seller=seller, email=email, password_hash=hash_password(body.password), role="owner"
+    )
     db.add(user)
     db.commit()
     return _start_session(db, response, user.id)
@@ -145,4 +147,23 @@ def logout(
 
 @router.get("/me", response_model=MeResponse)
 def me(user: CurrentUser) -> MeResponse:
-    return MeResponse(email=user.email, seller_id=user.seller_id, shop_name=user.seller.name)
+    return MeResponse(
+        email=user.email,
+        seller_id=user.seller_id,
+        shop_name=user.seller.name,
+        role=user.role,
+    )
+
+
+@router.post(
+    "/accept-invite",
+    response_model=TokenResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(login_limit)],
+)
+def accept_invite(body: AcceptInvitation, db: DbSession, response: Response) -> TokenResponse:
+    try:
+        user = members.accept_invitation(db, body.token, body.password)
+    except members.MembershipError as exc:
+        raise HTTPException(exc.status_code, exc.message) from exc
+    return _start_session(db, response, user.id)

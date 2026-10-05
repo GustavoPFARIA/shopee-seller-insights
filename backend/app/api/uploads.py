@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
 from app.config import get_settings
-from app.deps import CurrentUser, DbSession, rate_limit
+from app.deps import CurrentUser, DbSession, EditorUser, rate_limit
 from app.models import Upload
 from app.schemas import UploadOut, UploadResult
 from app.services.importer import ImportValidationError, import_orders, parse_file
@@ -39,7 +39,7 @@ async def read_limited(file: UploadFile) -> bytes:
     responses={413: {"description": "File too large"}, 422: {"description": "Invalid file"}},
 )
 async def upload_orders(
-    file: UploadFile, user: CurrentUser, db: DbSession
+    file: UploadFile, user: EditorUser, db: DbSession
 ) -> UploadResult | JSONResponse:
     settings = get_settings()
     content = await read_limited(file)

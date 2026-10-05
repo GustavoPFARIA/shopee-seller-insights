@@ -83,3 +83,6 @@ ul.alerts li { padding: 8px 0; border-bottom: 1px solid var(--border); display: 
 .login form { display: flex; flex-direction: column; gap: 10px; }
 .summary { white-space: pre-wrap; line-height: 1.5; }
 .file-button { display: inline-block; cursor: pointer; background: var(--surface); border: 1px solid var(--border); padding: 6px 12px; border-radius: 6px; }
+.role { font-size: 0.75rem; font-weight: 500; border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; vertical-align: middle; }
+.invite-link { word-break: break-all; background: var(--bg); padding: 2px 4px; border-radius: 4px; }
+ul.invites li { justify-content: space-between; align-items: center; }

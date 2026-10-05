@@ -10,7 +10,7 @@ from sqlalchemy import select
 from app.api.uploads import read_limited, upload_limit
 from app.config import get_settings
 from app.csv_safety import safe_cell
-from app.deps import CurrentUser, DbSession
+from app.deps import CurrentUser, DbSession, EditorUser
 from app.models import Product
 from app.schemas import CatalogImportResultOut, ProductOut, ProductUpdate
 from app.services.catalog_import import TEMPLATE_HEADER, apply_catalog, parse_catalog
@@ -28,7 +28,7 @@ def list_products(user: CurrentUser, db: DbSession) -> list[Product]:
 
 @router.patch("/{product_id}", response_model=ProductOut)
 def update_product(
-    product_id: int, body: ProductUpdate, user: CurrentUser, db: DbSession
+    product_id: int, body: ProductUpdate, user: EditorUser, db: DbSession
 ) -> Product:
     product = db.scalar(
         select(Product).where(Product.id == product_id, Product.seller_id == user.seller_id)
@@ -74,7 +74,7 @@ def catalog_template(user: CurrentUser, db: DbSession) -> Response:
     responses={413: {"description": "File too large"}, 422: {"description": "Invalid file"}},
 )
 async def import_catalog(
-    file: UploadFile, user: CurrentUser, db: DbSession
+    file: UploadFile, user: EditorUser, db: DbSession
 ) -> CatalogImportResultOut | JSONResponse:
     content = await read_limited(file)
     try:
