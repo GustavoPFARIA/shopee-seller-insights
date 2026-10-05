@@ -1,14 +1,16 @@
 """Application settings loaded from environment variables (never hard-coded)."""
 
 from functools import lru_cache
+from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    app_env: Literal["development", "test", "production"] = "development"
     database_url: str = Field(
         default="postgresql+psycopg://app_user:app_password@localhost:5432/shopee_insights"
     )
@@ -35,6 +37,15 @@ class Settings(BaseSettings):
 
     anthropic_api_key: SecretStr | None = None
     anthropic_model: str = "claude-haiku-4-5"
+
+    @model_validator(mode="after")
+    def _no_dev_secrets_in_production(self) -> "Settings":
+        if self.app_env == "production":
+            for name in ("jwt_secret", "pii_hash_secret"):
+                value: SecretStr = getattr(self, name)
+                if "dev-only" in value.get_secret_value():
+                    raise ValueError(f"{name.upper()} uses a dev-only default in production")
+        return self
 
 
 @lru_cache

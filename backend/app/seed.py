@@ -21,7 +21,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.db import get_sessionmaker
-from app.models import Product, Seller, User
+from app.models import Order, Product, Seller, User
 from app.security import hash_password
 from app.services.importer import import_orders, parse_file
 
@@ -180,6 +180,10 @@ def _get_or_create_user(db: Session, email: str, shop: str, code: str) -> User:
 def seed(db: Session, days: int = 120, today: date | None = None) -> dict[str, int]:
     today = today or date.today()
     user = _get_or_create_user(db, DEMO_EMAIL, "Demo Gadgets Store", "demo-gadgets")
+    # Dates are relative to "today": re-seeding on another day would create new fake
+    # orders, so the demo is loaded only once.
+    if db.scalar(select(Order.id).where(Order.seller_id == user.seller_id).limit(1)):
+        return {"orders_created": 0, "rows": 0}
     content = generate_csv(days, today)
     rows = parse_file(content, "seed-orders.csv", max_rows=1_000_000)
     summary = import_orders(

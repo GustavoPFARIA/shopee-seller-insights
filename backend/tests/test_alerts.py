@@ -65,6 +65,7 @@ def test_alert_rules(client: TestClient, auth_headers: dict[str, str], db: Sessi
     }
     stale = next(a for a in alerts if a.sku == "STALE")
     assert "60 days" in stale.message
+    assert next(a for a in alerts if a.sku == "EMPTY").message == "Out of stock."
     never = next(a for a in alerts if a.sku == "CANCEL")
     assert "No sales" in never.message
 

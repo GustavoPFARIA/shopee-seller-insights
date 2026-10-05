@@ -39,7 +39,11 @@ def compute_alerts(
                 product_id=p.id,
                 sku=p.sku,
                 name=p.name,
-                message=f"Only {p.stock_quantity} units left (threshold {p.low_stock_threshold}).",
+                message=(
+                    "Out of stock."
+                    if p.stock_quantity == 0
+                    else f"Only {p.stock_quantity} units left (threshold {p.low_stock_threshold})."
+                ),
             )
         )
 

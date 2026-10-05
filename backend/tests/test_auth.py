@@ -139,3 +139,19 @@ def test_cors_only_allows_configured_origin(client: TestClient) -> None:
         headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "GET"},
     )
     assert "access-control-allow-origin" not in denied.headers
+
+
+def test_production_rejects_dev_secrets() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError, match="dev-only"):
+        Settings(
+            app_env="production",
+            jwt_secret="dev-only-insecure-jwt-secret-change-me-please",
+            pii_hash_secret="x" * 40,
+        )
+    ok = Settings(app_env="production", jwt_secret="y" * 40, pii_hash_secret="x" * 40)
+    assert ok.app_env == "production"

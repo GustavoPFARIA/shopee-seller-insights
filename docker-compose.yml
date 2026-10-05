@@ -1,0 +1,59 @@
+# Local demo stack. Secrets fall back to clearly marked dev-only values so that
+# `docker compose up` works from a clean clone; copy .env.example to .env to override.
+# The API refuses to start with dev-only secrets when APP_ENV=production.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: shopee_insights
+      POSTGRES_USER: ssi_owner
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev-only-insecure-owner-pw}
+      APP_DB_USER: ssi_app
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-dev-only-insecure-app-pw}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ssi_owner -d shopee_insights"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # No "ports": the database is reachable only inside the compose network.
+    networks: [backend]
+
+  api:
+    build: ./backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: postgresql+psycopg://ssi_app:${APP_DB_PASSWORD:-dev-only-insecure-app-pw}@db:5432/shopee_insights
+      MIGRATION_DATABASE_URL: postgresql+psycopg://ssi_owner:${POSTGRES_PASSWORD:-dev-only-insecure-owner-pw}@db:5432/shopee_insights
+      JWT_SECRET: ${JWT_SECRET:-dev-only-insecure-jwt-secret-change-me-please}
+      PII_HASH_SECRET: ${PII_HASH_SECRET:-dev-only-insecure-pii-secret-change-me-please}
+      CORS_ORIGINS: '["http://localhost:5173"]'
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports:
+      - "127.0.0.1:8000:8000"  # Swagger UI for local development only
+    networks: [backend, frontend]
+
+  web:
+    build: ./frontend
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_PROXY_TARGET: http://api:8000
+    ports:
+      - "5173:5173"
+    networks: [frontend]
+
+networks:
+  backend:
+  frontend:
+
+volumes:
+  db-data:
