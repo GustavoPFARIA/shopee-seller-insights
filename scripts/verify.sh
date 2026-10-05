@@ -63,7 +63,7 @@ stage_static() {
   cd "$BACKEND"
   run "ruff lint" "$BIN/ruff" check .
   run "ruff format" "$BIN/ruff" format --check .
-  run "mypy --strict" "$BIN/mypy" app tests benchmarks
+  run "mypy --strict" "$BIN/mypy" app tests benchmarks devtools
   run "smoke test lint" "$BIN/ruff" check --config "$BACKEND/pyproject.toml" "$ROOT/scripts"
   cd "$FRONTEND"
   run "frontend lint" npm run --silent lint

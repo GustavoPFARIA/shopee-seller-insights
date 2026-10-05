@@ -16,7 +16,7 @@ from app.config import get_settings
 from app.integrations import shopee_sync
 from app.integrations.shopee_client import ShopeeClient
 from app.models import Order, ShopeeConnection, SyncRun
-from tests.fake_shopee import HOST, PARTNER_ID, PARTNER_KEY, SHOP_ID, FakeShopee
+from devtools.fake_shopee import HOST, PARTNER_ID, PARTNER_KEY, SHOP_ID, FakeShopee
 
 
 @pytest.fixture

@@ -6,6 +6,9 @@ from typing import Literal
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Public key used only by docker-compose.shopee-demo.yml; refused in production.
+DEMO_TOKEN_ENCRYPTION_KEY = "IJZ0MheRK4rca34wsxNQPxrWmnYzUR5cZuQ5N98PXM0="  # noqa: S105
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -43,6 +46,8 @@ class Settings(BaseSettings):
     shopee_partner_key: SecretStr | None = None
     # Test environment by default; production is https://partner.shopeemobile.com
     shopee_api_host: str = "https://partner.test-stable.shopeemobile.com"
+    # Browser-facing host for the consent page; empty = SHOPEE_API_HOST (real Shopee).
+    shopee_auth_host: str | None = None
     shopee_redirect_url: str = "http://localhost:8080/api/shopee/callback"
     # Push (webhook): the URL registered on the Shopee console, used in the signature,
     # and its key if the console shows one different from the partner key.
@@ -71,6 +76,7 @@ class Settings(BaseSettings):
         "shopee_partner_id",
         "shopee_partner_key",
         "shopee_push_key",
+        "shopee_auth_host",
         "smtp_host",
         "smtp_username",
         "smtp_password",
@@ -91,7 +97,10 @@ class Settings(BaseSettings):
                 if "dev-only" in value.get_secret_value():
                     raise ValueError(f"{name.upper()} uses a dev-only default in production")
             key = self.token_encryption_key
-            if key is not None and "dev-only" in key.get_secret_value():
+            if key is not None and (
+                "dev-only" in key.get_secret_value()
+                or key.get_secret_value() == DEMO_TOKEN_ENCRYPTION_KEY
+            ):
                 raise ValueError("TOKEN_ENCRYPTION_KEY uses a dev-only default in production")
             if not self.cookie_secure:
                 raise ValueError("COOKIE_SECURE must be true in production")

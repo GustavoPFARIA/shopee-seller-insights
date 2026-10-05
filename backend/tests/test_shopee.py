@@ -19,8 +19,8 @@ from app.config import get_settings
 from app.integrations import shopee_sync
 from app.integrations.shopee_client import ShopeeApiError, ShopeeClient, sign
 from app.models import Membership, Order, OrderItem, Product, ShopeeConnection, SyncRun
-from tests import fake_shopee
-from tests.fake_shopee import HOST, PARTNER_ID, PARTNER_KEY, SHOP_ID, FakeShopee, stock
+from devtools import fake_shopee
+from devtools.fake_shopee import HOST, PARTNER_ID, PARTNER_KEY, SHOP_ID, FakeShopee, stock
 
 DAY = 86_400
 
@@ -91,6 +91,19 @@ def test_sign_matches_shopee_spec() -> None:
     assert (
         sign(PARTNER_KEY, PARTNER_ID, "/api/v2/order/get_order_list", 1700000000, "tok", SHOP_ID)
         == expected
+    )
+
+
+def test_authorization_url_can_use_a_browser_facing_host() -> None:
+    c = ShopeeClient(
+        partner_id=PARTNER_ID,
+        partner_key=PARTNER_KEY,
+        host="http://internal:9555",
+        auth_host="http://localhost:9555",
+        clock=lambda: 1700000000,
+    )
+    assert c.authorization_url("https://app/cb").startswith(
+        "http://localhost:9555/api/v2/shop/auth_partner?"
     )
 
 

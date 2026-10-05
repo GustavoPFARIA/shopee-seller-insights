@@ -66,6 +66,7 @@ def make_client() -> ShopeeClient:
         partner_id=settings.shopee_partner_id,
         partner_key=settings.shopee_partner_key.get_secret_value(),
         host=settings.shopee_api_host,
+        auth_host=settings.shopee_auth_host,
     )
 
 

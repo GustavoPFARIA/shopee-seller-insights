@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 import jwt
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -188,3 +189,16 @@ def test_blank_optional_settings_mean_disabled() -> None:
     assert s.shopee_partner_id is None
     assert s.shopee_enabled is False
     assert s.anthropic_api_key is None
+
+
+def test_production_refuses_demo_token_key() -> None:
+    from app.config import DEMO_TOKEN_ENCRYPTION_KEY, Settings
+
+    with pytest.raises(ValidationError, match="TOKEN_ENCRYPTION_KEY"):
+        Settings(
+            app_env="production",
+            jwt_secret="y" * 40,
+            pii_hash_secret="x" * 40,
+            cookie_secure=True,
+            token_encryption_key=DEMO_TOKEN_ENCRYPTION_KEY,
+        )

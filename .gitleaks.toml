@@ -1,0 +1,9 @@
+# Secret-scan configuration. Extends the default gitleaks rules.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Public, demo-only values that are refused when APP_ENV=production"
+# Fernet key used only by docker-compose.shopee-demo.yml (see app/config.py,
+# DEMO_TOKEN_ENCRYPTION_KEY). Only this exact value is allowed.
+regexes = ['''IJZ0MheRK4rca34wsxNQPxrWmnYzUR5cZuQ5N98PXM0=''']

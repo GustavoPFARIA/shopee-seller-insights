@@ -1,0 +1,47 @@
+# Optional demo of the Shopee integration WITHOUT real Shopee credentials.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.shopee-demo.yml up --build
+#
+# Adds a local fake Shopee Open Platform (backend/devtools/fake_shopee_server.py) and
+# points the API and worker at it. Open http://localhost:8080 -> Integrations ->
+# Connect Shopee shop, authorize on the fake consent page, then use
+# http://localhost:9555 to create orders that reach the app through signed webhooks.
+# Every value below is public and demo-only; the API refuses them in production.
+
+x-shopee-demo: &shopee-demo
+  SHOPEE_PARTNER_ID: "2001887"
+  SHOPEE_PARTNER_KEY: fake-partner-key-for-tests-0123456789abcdef
+  SHOPEE_API_HOST: http://fake-shopee:9555        # server-to-server (compose network)
+  SHOPEE_AUTH_HOST: http://localhost:9555          # consent page opened by the browser
+  TOKEN_ENCRYPTION_KEY: IJZ0MheRK4rca34wsxNQPxrWmnYzUR5cZuQ5N98PXM0=
+  SHOPEE_SYNC_INTERVAL_MINUTES: "5"
+
+services:
+  fake-shopee:
+    image: shopee-seller-insights-api
+    entrypoint: ["python", "-m", "devtools.fake_shopee_server"]
+    volumes:
+      - ./backend/devtools:/app/devtools:ro
+    environment:
+      FAKE_SHOPEE_PUSH_TARGET: http://api:8000/api/shopee/push
+      SHOPEE_PUSH_URL: ${SHOPEE_PUSH_URL:-http://localhost:8080/api/shopee/push}
+      # The image's settings are imported by the fake (catalogue); these satisfy validation.
+      JWT_SECRET: dev-only-insecure-jwt-secret-change-me-please
+      PII_HASH_SECRET: dev-only-insecure-pii-secret-change-me-please
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9555/')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    ports:
+      - "127.0.0.1:9555:9555"
+    networks: [backend]
+
+  api:
+    environment: *shopee-demo
+    depends_on:
+      fake-shopee:
+        condition: service_healthy
+
+  worker:
+    environment: *shopee-demo

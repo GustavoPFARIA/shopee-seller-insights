@@ -55,6 +55,7 @@ class ShopeeClient:
         partner_id: int,
         partner_key: str,
         host: str,
+        auth_host: str | None = None,
         http: httpx.Client | None = None,
         clock: Callable[[], float] = time.time,
         sleep: Callable[[float], None] = time.sleep,
@@ -62,6 +63,9 @@ class ShopeeClient:
         self.partner_id = partner_id
         self._key = partner_key
         self.host = host.rstrip("/")
+        # Host the *browser* opens for the consent page. Same as `host` on the real
+        # Shopee; differs only when the API is reached through a private network.
+        self.auth_host = (auth_host or host).rstrip("/")
         self._http = http or httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0))
         self._clock = clock
         self._sleep = sleep
@@ -79,7 +83,7 @@ class ShopeeClient:
                 "redirect": redirect_url,
             }
         )
-        return f"{self.host}{path}?{query}"
+        return f"{self.auth_host}{path}?{query}"
 
     def get_token(self, code: str, shop_id: int) -> TokenPair:
         body = {"code": code, "shop_id": shop_id, "partner_id": self.partner_id}
