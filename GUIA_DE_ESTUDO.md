@@ -191,7 +191,7 @@ Rode `git log --oneline` no repositório para ver a sequência:
 ## 7. Exercícios sugeridos
 
 1. Rode `scripts/verify.sh static test` e leia a saída de cada etapa.
-2. Leia `backend/tests/test_isolation*.py` (ou procure por "isolation") e explique como
+2. Leia `backend/tests/test_shops.py` e os testes de isolamento em `test_metrics.py` e explique como
    ele prova que uma loja não vê a outra.
 3. Suba o modo demo (`docker compose -f docker-compose.yml -f docker-compose.shopee-demo.yml up --build`):
    - conecte a loja falsa;
