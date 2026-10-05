@@ -178,3 +178,32 @@ class InvitationCreated(InvitationOut):
 class AcceptInvitation(BaseModel):
     token: str = Field(min_length=20, max_length=200)
     password: str = Field(min_length=10, max_length=128)
+
+
+class SyncRunOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    trigger: Literal["manual", "scheduled"]
+    status: Literal["running", "success", "error"]
+    started_at: datetime
+    finished_at: datetime | None
+    orders_created: int
+    orders_updated: int
+    orders_skipped: int
+    products_stock_updated: int
+    error: str | None
+
+
+class ShopeeStatus(BaseModel):
+    enabled: bool
+    connected: bool
+    shop_id: int | None = None
+    connected_at: datetime | None = None
+    orders_synced_until: datetime | None = None
+    sync_interval_minutes: int
+    runs: list[SyncRunOut] = []
+
+
+class AuthorizationUrl(BaseModel):
+    authorization_url: str

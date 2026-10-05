@@ -12,11 +12,11 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import ROUND_DOWN, Decimal, InvalidOperation
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 
 import pandas as pd
 from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, ValidationError
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -70,8 +70,17 @@ STATUS_ALIASES: dict[str, str] = {
     "cancelled": "cancelled",
     "devolução/reembolso": "returned",
     "return/refund": "returned",
+    # Shopee Open Platform API statuses (lower-cased).
+    "ready_to_ship": "to_ship",
+    "processed": "to_ship",
+    "invoice_pending": "to_ship",
+    "retry_ship": "to_ship",
+    "to_confirm_receive": "shipped",
+    "in_cancel": "cancelled",
+    "to_return": "returned",
 }
 OrderStatus = Literal["completed", "shipped", "to_ship", "unpaid", "cancelled", "returned"]
+CANONICAL_STATUSES = frozenset(get_args(OrderStatus))
 # Orders in these statuses do not generate revenue.
 NON_REVENUE_STATUSES = ("cancelled", "unpaid", "returned")
 
@@ -103,7 +112,8 @@ def parse_decimal(value: object) -> Decimal:
 
 
 def _parse_status(value: object) -> str:
-    status = STATUS_ALIASES.get(str(value).strip().lower())
+    key = str(value).strip().lower()
+    status = key if key in CANONICAL_STATUSES else STATUS_ALIASES.get(key)
     if status is None:
         raise ValueError(f"unknown order status: {value!r}")
     return status
@@ -359,6 +369,79 @@ def import_orders(
 
     db.commit()
     return ImportSummary(upload=upload, products_created=products_created)
+
+
+@dataclass
+class ApiUpsertSummary:
+    created: int = 0
+    updated: int = 0
+    unchanged: int = 0
+
+
+def upsert_api_orders(
+    db: Session,
+    *,
+    seller_id: int,
+    orders: dict[str, list[OrderRow]],
+    refresh_fees: set[str],
+    fees_final: set[str],
+) -> ApiUpsertSummary:
+    """Upsert orders coming from the Shopee API in one transaction.
+
+    New orders are inserted with their items. Existing orders get their status
+    updated; when fresh escrow fees were fetched (``refresh_fees``) their items are
+    rebuilt, since the escrow statement is more exact than an export.
+    """
+    summary = ApiUpsertSummary()
+    rows = [row for lines in orders.values() for row in lines]
+    if not rows:
+        return summary
+    _ensure_products(db, seller_id, rows)
+    product_ids: dict[str, int] = {
+        sku: pid
+        for sku, pid in db.execute(
+            select(Product.sku, Product.id).where(
+                Product.seller_id == seller_id, Product.sku.in_({r.sku for r in rows})
+            )
+        )
+    }
+    existing = {
+        o.order_sn: o
+        for o in db.scalars(
+            select(Order).where(Order.seller_id == seller_id, Order.order_sn.in_(list(orders)))
+        )
+    }
+    for order_sn, lines in orders.items():
+        head = lines[0]
+        order = existing.get(order_sn)
+        if order is None:
+            order = Order(
+                seller_id=seller_id,
+                order_sn=order_sn,
+                status=head.status,
+                ordered_at=head.ordered_at,
+                buyer_hash=pseudonymize(head.buyer_username) if head.buyer_username else None,
+                source="shopee_api",
+                fees_final=order_sn in fees_final,
+            )
+            db.add(order)
+            db.flush()
+            db.add_all(_build_items(order.id, lines, product_ids))
+            summary.created += 1
+            continue
+        changed = order.status != head.status
+        order.status = head.status
+        if order_sn in refresh_fees:
+            db.execute(delete(OrderItem).where(OrderItem.order_id == order.id))
+            db.add_all(_build_items(order.id, lines, product_ids))
+            order.fees_final = order_sn in fees_final
+            changed = True
+        if changed:
+            summary.updated += 1
+        else:
+            summary.unchanged += 1
+    db.commit()
+    return summary
 
 
 def _ensure_products(db: Session, seller_id: int, rows: list[OrderRow]) -> int:

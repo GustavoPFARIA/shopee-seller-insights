@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -16,6 +17,7 @@ from sqlalchemy import (
     Numeric,
     PrimaryKeyConstraint,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -105,6 +107,7 @@ class Order(Base):
     __table_args__ = (
         # Idempotency key: the same Shopee order can only exist once per seller.
         UniqueConstraint("seller_id", "order_sn", name="uq_orders_seller_order_sn"),
+        CheckConstraint("source IN ('file', 'shopee_api')", name="ck_orders_source"),
         Index("ix_orders_seller_ordered_at", "seller_id", "ordered_at"),
     )
 
@@ -118,6 +121,10 @@ class Order(Base):
     ordered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     # HMAC-SHA256 of the buyer username; raw PII is never stored.
     buyer_hash: Mapped[str | None] = mapped_column(String(64))
+    # "file" (manual upload) or "shopee_api" (Open Platform sync).
+    source: Mapped[str] = mapped_column(String(16), default="file", server_default="file")
+    # True once fees come from the final escrow statement (completed order).
+    fees_final: Mapped[bool] = mapped_column(default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     items: Mapped[list["OrderItem"]] = relationship(
@@ -211,3 +218,64 @@ class Invitation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ShopeeConnection(Base):
+    """A shop authorized through Shopee Open Platform OAuth (one per seller).
+
+    Access and refresh tokens are encrypted at rest with Fernet (TOKEN_ENCRYPTION_KEY).
+    """
+
+    __tablename__ = "shopee_connections"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    seller_id: Mapped[int] = mapped_column(
+        ForeignKey("sellers.id", ondelete="CASCADE"), unique=True
+    )
+    # A Shopee shop can be linked to only one seller account.
+    shop_id: Mapped[int] = mapped_column(BigInteger, unique=True)
+    access_token_enc: Mapped[str] = mapped_column(Text)
+    refresh_token_enc: Mapped[str] = mapped_column(Text)
+    access_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    refresh_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # High-water mark of order update_time already synced.
+    orders_synced_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class OAuthState(Base):
+    """Single-use CSRF state for the Shopee OAuth redirect (stored as SHA-256)."""
+
+    __tablename__ = "oauth_states"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    state_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    seller_id: Mapped[int] = mapped_column(ForeignKey("sellers.id", ondelete="CASCADE"))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class SyncRun(Base):
+    """History of Shopee synchronizations (manual or by the worker)."""
+
+    __tablename__ = "sync_runs"
+    __table_args__ = (
+        CheckConstraint("status IN ('running', 'success', 'error')", name="ck_sync_runs_status"),
+        CheckConstraint("trigger IN ('manual', 'scheduled')", name="ck_sync_runs_trigger"),
+        Index("ix_sync_runs_seller_started", "seller_id", "started_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    seller_id: Mapped[int] = mapped_column(ForeignKey("sellers.id", ondelete="CASCADE"))
+    trigger: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), default="running")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    orders_created: Mapped[int] = mapped_column(Integer, default=0)
+    orders_updated: Mapped[int] = mapped_column(Integer, default=0)
+    orders_skipped: Mapped[int] = mapped_column(Integer, default=0)
+    products_stock_updated: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(String(500))

@@ -2,6 +2,20 @@
 # `docker compose up` works from a clean clone; copy .env.example to .env to override.
 # The API refuses to start with dev-only secrets when APP_ENV=production.
 
+x-app-env: &app-env
+  APP_ENV: ${APP_ENV:-development}
+  DATABASE_URL: postgresql+psycopg://ssi_app:${APP_DB_PASSWORD:-dev-only-insecure-app-pw}@db:5432/shopee_insights
+  JWT_SECRET: ${JWT_SECRET:-dev-only-insecure-jwt-secret-change-me-please}
+  PII_HASH_SECRET: ${PII_HASH_SECRET:-dev-only-insecure-pii-secret-change-me-please}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  # Shopee Open Platform (optional): the integration stays off until these are set.
+  SHOPEE_PARTNER_ID: ${SHOPEE_PARTNER_ID:-}
+  SHOPEE_PARTNER_KEY: ${SHOPEE_PARTNER_KEY:-}
+  SHOPEE_API_HOST: ${SHOPEE_API_HOST:-https://partner.test-stable.shopeemobile.com}
+  SHOPEE_REDIRECT_URL: ${SHOPEE_REDIRECT_URL:-http://localhost:8080/api/shopee/callback}
+  SHOPEE_SYNC_INTERVAL_MINUTES: ${SHOPEE_SYNC_INTERVAL_MINUTES:-30}
+  TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
+
 services:
   db:
     image: postgres:16-alpine
@@ -24,27 +38,40 @@ services:
 
   api:
     build: ./backend
+    image: shopee-seller-insights-api
     depends_on:
       db:
         condition: service_healthy
     environment:
-      APP_ENV: ${APP_ENV:-development}
-      DATABASE_URL: postgresql+psycopg://ssi_app:${APP_DB_PASSWORD:-dev-only-insecure-app-pw}@db:5432/shopee_insights
+      <<: *app-env
       MIGRATION_DATABASE_URL: postgresql+psycopg://ssi_owner:${POSTGRES_PASSWORD:-dev-only-insecure-owner-pw}@db:5432/shopee_insights
-      JWT_SECRET: ${JWT_SECRET:-dev-only-insecure-jwt-secret-change-me-please}
-      PII_HASH_SECRET: ${PII_HASH_SECRET:-dev-only-insecure-pii-secret-change-me-please}
       CORS_ORIGINS: '["http://localhost:8080"]'
       # Trust X-Forwarded-For only from the nginx container (fixed IP below).
       FORWARDED_ALLOW_IPS: 172.28.0.10
       # The local demo is plain http; production must keep Secure cookies (enforced).
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     # No published port: reachable only through nginx (Swagger at /api/docs).
     networks: [backend, frontend]
 
+  worker:
+    # Same image as the API; runs the scheduled Shopee sync (idle if not configured).
+    build: ./backend
+    image: shopee-seller-insights-api
+    entrypoint: ["python", "-m", "app.worker"]
+    depends_on:
+      api:
+        condition: service_healthy  # migrations have been applied
+    environment:
+      <<: *app-env
+    restart: unless-stopped
+    healthcheck:
+      disable: true  # the image's healthcheck probes the HTTP API, not the worker
+    networks: [backend]
+
   web:
     build: ./frontend
+    image: shopee-seller-insights-web
     depends_on:
       api:
         condition: service_healthy

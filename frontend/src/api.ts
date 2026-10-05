@@ -76,6 +76,27 @@ export interface UploadResult {
   orders_unchanged: number
   products_created: number
 }
+export interface SyncRun {
+  id: number
+  trigger: 'manual' | 'scheduled'
+  status: 'running' | 'success' | 'error'
+  started_at: string
+  finished_at: string | null
+  orders_created: number
+  orders_updated: number
+  orders_skipped: number
+  products_stock_updated: number
+  error: string | null
+}
+export interface ShopeeStatus {
+  enabled: boolean
+  connected: boolean
+  shop_id: number | null
+  connected_at: string | null
+  orders_synced_until: string | null
+  sync_interval_minutes: number
+  runs: SyncRun[]
+}
 export interface CatalogImportResult {
   rows: number
   updated: number
@@ -199,6 +220,11 @@ export const api = {
     })
     accessToken = res.access_token
   },
+  shopeeStatus: () => request<ShopeeStatus>('/api/shopee/status'),
+  shopeeConnect: () =>
+    request<{ authorization_url: string }>('/api/shopee/connect', { method: 'POST' }),
+  shopeeSync: () => request<SyncRun>('/api/shopee/sync', { method: 'POST' }),
+  shopeeDisconnect: () => request<void>('/api/shopee/connection', { method: 'DELETE' }),
   members: () => request<Member[]>('/api/members'),
   invitations: () => request<Invitation[]>('/api/members/invitations'),
   invite: (email: string, role: Role) =>

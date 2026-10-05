@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,8 +38,31 @@ class Settings(BaseSettings):
     upload_rate_limit: int = Field(default=10, ge=1)
     upload_rate_window_seconds: int = Field(default=3600, ge=1)
 
+    # Shopee Open Platform (optional; the integration is off unless both are set).
+    shopee_partner_id: int | None = None
+    shopee_partner_key: SecretStr | None = None
+    # Test environment by default; production is https://partner.shopeemobile.com
+    shopee_api_host: str = "https://partner.test-stable.shopeemobile.com"
+    shopee_redirect_url: str = "http://localhost:8080/api/shopee/callback"
+    shopee_backfill_days: int = Field(default=90, ge=1, le=365)
+    shopee_sync_interval_minutes: int = Field(default=30, ge=5, le=24 * 60)
+    # Fernet key (urlsafe base64, 32 bytes) used to encrypt Shopee tokens at rest.
+    token_encryption_key: SecretStr | None = None
+
     anthropic_api_key: SecretStr | None = None
     anthropic_model: str = "claude-haiku-4-5"
+
+    @field_validator(
+        "shopee_partner_id",
+        "shopee_partner_key",
+        "token_encryption_key",
+        "anthropic_api_key",
+        mode="before",
+    )
+    @classmethod
+    def _blank_is_unset(cls, value: object) -> object:
+        """docker compose passes unset optional variables as empty strings."""
+        return None if isinstance(value, str) and value.strip() == "" else value
 
     @model_validator(mode="after")
     def _no_dev_secrets_in_production(self) -> "Settings":
@@ -48,9 +71,20 @@ class Settings(BaseSettings):
                 value: SecretStr = getattr(self, name)
                 if "dev-only" in value.get_secret_value():
                     raise ValueError(f"{name.upper()} uses a dev-only default in production")
+            key = self.token_encryption_key
+            if key is not None and "dev-only" in key.get_secret_value():
+                raise ValueError("TOKEN_ENCRYPTION_KEY uses a dev-only default in production")
             if not self.cookie_secure:
                 raise ValueError("COOKIE_SECURE must be true in production")
         return self
+
+    @property
+    def shopee_enabled(self) -> bool:
+        return (
+            self.shopee_partner_id is not None
+            and self.shopee_partner_key is not None
+            and self.token_encryption_key is not None
+        )
 
 
 @lru_cache

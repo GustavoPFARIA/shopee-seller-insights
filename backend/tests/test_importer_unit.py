@@ -184,3 +184,21 @@ def test_semicolon_delimited_export() -> None:
         semi = semi.replace(a, b)
     rows = parse_file(semi.encode(), "x.csv", max_rows=10)
     assert rows[0].unit_price == Decimal("29.90")
+
+
+@pytest.mark.parametrize(
+    "status", ["completed", "shipped", "to_ship", "unpaid", "cancelled", "returned"]
+)
+def test_canonical_statuses_are_accepted(status: str) -> None:
+    row = OrderRow.model_validate(
+        {
+            "order_sn": "A1",
+            "status": status,
+            "ordered_at": "2025-09-01 10:00",
+            "sku": "SKU-1",
+            "product_name": "x",
+            "unit_price": "1",
+            "quantity": 1,
+        }
+    )
+    assert row.status == status

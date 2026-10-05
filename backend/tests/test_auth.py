@@ -100,7 +100,7 @@ def test_alg_none_token_rejected(client: TestClient) -> None:
     now = datetime.now(UTC)
     token = jwt.encode(
         {"sub": "1", "iat": now, "exp": now + timedelta(minutes=5), "type": "access"},
-        key=None,
+        key="",
         algorithm="none",
     )
     resp = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
@@ -172,3 +172,19 @@ def test_docs_hidden_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
     prod = TestClient(create_app())
     assert prod.get("/api/docs").status_code == 404
     assert prod.get("/api/openapi.json").status_code == 404
+
+
+def test_blank_optional_settings_mean_disabled() -> None:
+    from app.config import Settings
+
+    s = Settings(
+        jwt_secret="y" * 40,
+        pii_hash_secret="x" * 40,
+        shopee_partner_id="",
+        shopee_partner_key="",
+        token_encryption_key=" ",
+        anthropic_api_key="",
+    )
+    assert s.shopee_partner_id is None
+    assert s.shopee_enabled is False
+    assert s.anthropic_api_key is None

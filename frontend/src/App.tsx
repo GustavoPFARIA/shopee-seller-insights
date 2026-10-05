@@ -4,29 +4,32 @@ import AcceptInvite from './pages/AcceptInvite'
 import Dashboard from './pages/Dashboard'
 import Login from './pages/Login'
 import ProductsPage from './pages/ProductsPage'
+import ShopeePage from './pages/ShopeePage'
 import TeamPage from './pages/TeamPage'
 import UploadPage from './pages/UploadPage'
+import { readInviteToken, readShopeeCallback } from './urlHash'
 
-type Tab = 'dashboard' | 'upload' | 'products' | 'team'
+type Tab = 'dashboard' | 'upload' | 'products' | 'shopee' | 'team'
 const TAB_LABEL: Record<Tab, string> = {
   dashboard: 'Dashboard',
   upload: 'Upload',
   products: 'Products',
+  shopee: 'Shopee',
   team: 'Team',
-}
-
-/** Invite tokens travel in the URL fragment, which browsers never send to servers. */
-function readInviteToken(): string | null {
-  const match = window.location.hash.match(/^#invite=([\w-]+)$/)
-  return match ? match[1] : null
 }
 
 export default function App() {
   const [me, setMe] = useState<Me | null>(null)
-  const [tab, setTab] = useState<Tab>('dashboard')
+  // Coming back from the Shopee OAuth redirect: show the result on the Shopee tab.
+  const [shopeeCallback] = useState(readShopeeCallback)
+  const [tab, setTab] = useState<Tab>(shopeeCallback ? 'shopee' : 'dashboard')
   const [inviteToken, setInviteToken] = useState(readInviteToken)
   // Accepting an invite needs no session lookup; otherwise try the refresh cookie first.
   const [checking, setChecking] = useState(() => readInviteToken() === null)
+
+  useEffect(() => {
+    if (shopeeCallback) history.replaceState(null, '', window.location.pathname)
+  }, [shopeeCallback])
 
   const loadMe = useCallback(() => {
     api
@@ -60,8 +63,8 @@ export default function App() {
 
   const canEdit = me.role !== 'viewer'
   const tabs: Tab[] = canEdit
-    ? ['dashboard', 'upload', 'products', 'team']
-    : ['dashboard', 'products', 'team']
+    ? ['dashboard', 'upload', 'products', 'shopee', 'team']
+    : ['dashboard', 'products', 'shopee', 'team']
 
   return (
     <div className="app">
@@ -81,6 +84,7 @@ export default function App() {
       {tab === 'dashboard' && <Dashboard canEdit={canEdit} />}
       {tab === 'upload' && canEdit && <UploadPage />}
       {tab === 'products' && <ProductsPage canEdit={canEdit} />}
+      {tab === 'shopee' && <ShopeePage me={me} callback={shopeeCallback} />}
       {tab === 'team' && <TeamPage me={me} />}
     </div>
   )
