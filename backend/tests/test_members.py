@@ -164,18 +164,31 @@ def test_invitation_lifecycle(client: TestClient, auth_headers: dict[str, str]) 
     assert _invite(client, auth_headers, "seller-b-not-member@example.com", "viewer")[0] == 201
 
 
-def test_accept_rejects_email_registered_meanwhile(
+def test_existing_account_joins_with_its_own_password(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
+    """Someone who already has an account confirms their password to join."""
     _, body = _invite(client, auth_headers, "race@example.com", "viewer")
     client.post(
         "/api/auth/register",
         json={"email": "race@example.com", "password": "another-password", "shop_name": "Mine"},
     )
-    resp = client.post(
+    wrong = client.post(
         "/api/auth/accept-invite", json={"token": body["token"], "password": "member-password-123"}
     )
-    assert resp.status_code == 409
+    assert wrong.status_code == 401
+    ok = client.post(
+        "/api/auth/accept-invite", json={"token": body["token"], "password": "another-password"}
+    )
+    assert ok.status_code == 201
+    shop_a = client.get("/api/auth/me", headers=auth_headers).json()["seller_id"]
+    assert ok.json()["shop_id"] == shop_a
+    headers = {"Authorization": f"Bearer {ok.json()['access_token']}"}
+    me = client.get("/api/auth/me", headers=headers).json()
+    assert sorted((s["name"], s["role"]) for s in me["shops"]) == [
+        ("Mine", "owner"),
+        ("Shop A", "viewer"),
+    ]
 
 
 def test_invite_does_not_reveal_registered_emails(
@@ -186,7 +199,8 @@ def test_invite_does_not_reveal_registered_emails(
     resp = client.post(
         "/api/auth/accept-invite", json={"token": body["token"], "password": "member-password-123"}
     )
-    assert resp.status_code == 409  # only the invitee learns about the conflict
+    # Only the invitee learns the e-mail has an account (and must prove it is theirs).
+    assert resp.status_code == 401
 
 
 def test_membership_changes_are_serialized_per_shop(

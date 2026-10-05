@@ -47,7 +47,7 @@ def _clean_tables() -> Iterator[None]:
         conn.execute(
             text(
                 "TRUNCATE order_items, orders, uploads, products, users, sellers, "
-                "rate_limit_hits, refresh_tokens, invitations, shopee_connections, "
+                "rate_limit_hits, refresh_tokens, invitations, memberships, shopee_connections, "
                 "oauth_states, sync_runs "
                 "RESTART IDENTITY CASCADE"
             )

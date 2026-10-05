@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app import mailer, worker
 from app.config import Settings, get_settings
-from app.models import Seller, User
+from app.models import Membership, Seller, User
 from app.services import ai_summary, digest
 from tests.factories import Line, build_csv
 
@@ -198,10 +198,12 @@ def test_due_digests_are_sent_weekly_to_owners_and_managers(
     _seed_week(client, auth_headers)
     client.patch("/api/settings", headers=auth_headers, json={"weekly_email": True})
     seller_id = db.scalar(select(Seller.id))
-    db.add(User(seller_id=seller_id, email="viewer@example.com", password_hash="x", role="viewer"))
-    db.add(
-        User(seller_id=seller_id, email="manager@example.com", password_hash="x", role="manager")
-    )
+    assert seller_id is not None
+    for email, role in (("viewer@example.com", "viewer"), ("manager@example.com", "manager")):
+        member = User(seller_id=seller_id, email=email, password_hash="x")
+        db.add(member)
+        db.flush()
+        db.add(Membership(user_id=member.id, seller_id=seller_id, role=role))
     db.commit()
     today = date.today()
     assert digest.send_due_digests(db, today) == 1
@@ -223,7 +225,14 @@ def test_digest_skips_opted_out_failed_and_empty_shops(
     assert digest.send_due_digests(db, date.today()) == 0
     assert db.scalar(select(Seller.last_digest_sent_on).where(Seller.name == "Shop A")) is None
     smtp.fail = False
-    db.execute(update(User).where(User.email == "seller-a@example.com").values(role="viewer"))
+    db.execute(
+        update(Membership)
+        .where(
+            Membership.user_id
+            == select(User.id).where(User.email == "seller-a@example.com").scalar_subquery()
+        )
+        .values(role="viewer")
+    )
     db.commit()
     assert digest.send_due_digests(db, date.today()) == 0  # no owner/manager to send to
 

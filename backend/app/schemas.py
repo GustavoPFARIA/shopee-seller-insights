@@ -16,16 +16,30 @@ class RegisterRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: Literal["bearer"] = "bearer"  # noqa: S105
+    # Set when the client should switch to a specific shop (e.g. after joining one).
+    shop_id: int | None = None
 
 
 Role = Literal["owner", "manager", "viewer"]
 
 
+class ShopRef(BaseModel):
+    id: int
+    name: str
+    role: Role
+
+
 class MeResponse(BaseModel):
     email: str
+    # The active shop (from the X-Shop-Id header, else the user's default shop).
     seller_id: int
     shop_name: str
     role: Role
+    shops: list[ShopRef] = []
+
+
+class ShopCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
 
 
 class ProductOut(BaseModel):

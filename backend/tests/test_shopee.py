@@ -18,7 +18,7 @@ from app import crypto, worker
 from app.config import get_settings
 from app.integrations import shopee_sync
 from app.integrations.shopee_client import ShopeeApiError, ShopeeClient, sign
-from app.models import Order, OrderItem, Product, ShopeeConnection, SyncRun, User
+from app.models import Membership, Order, OrderItem, Product, ShopeeConnection, SyncRun
 from tests import fake_shopee
 from tests.fake_shopee import HOST, PARTNER_ID, PARTNER_KEY, SHOP_ID, FakeShopee, stock
 
@@ -213,11 +213,11 @@ def test_shop_cannot_be_linked_to_two_sellers(
 def test_permissions_and_configuration(
     client: TestClient, auth_headers: dict[str, str], db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    db.execute(update(User).values(role="manager"))
+    db.execute(update(Membership).values(role="manager"))
     db.commit()
     assert client.post("/api/shopee/connect", headers=auth_headers).status_code == 403
     assert client.delete("/api/shopee/connection", headers=auth_headers).status_code == 403
-    db.execute(update(User).values(role="owner"))
+    db.execute(update(Membership).values(role="owner"))
     db.commit()
     # Not configured on this server (no partner credentials).
     assert client.post("/api/shopee/connect", headers=auth_headers).status_code == 503
@@ -389,7 +389,7 @@ def test_sync_requires_connection_and_editor(
     client: TestClient, auth_headers: dict[str, str], fake: FakeShopee, db: Session
 ) -> None:
     assert client.post("/api/shopee/sync", headers=auth_headers).status_code == 404
-    db.execute(update(User).values(role="viewer"))
+    db.execute(update(Membership).values(role="viewer"))
     db.commit()
     assert client.post("/api/shopee/sync", headers=auth_headers).status_code == 403
 

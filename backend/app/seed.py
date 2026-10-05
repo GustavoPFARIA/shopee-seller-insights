@@ -21,7 +21,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.db import get_sessionmaker
-from app.models import Order, Product, Seller, User
+from app.models import Membership, Order, Product, Seller, User
 from app.security import hash_password
 from app.services.importer import import_orders, parse_file
 
@@ -169,28 +169,34 @@ def generate_csv(days: int, today: date, seed: int = 42) -> bytes:
 
 
 def _get_or_create_user(db: Session, email: str, shop: str, code: str) -> User:
+    """Owner of a new shop (idempotent)."""
     user = db.scalar(select(User).where(User.email == email))
     if user is None:
         seller = Seller(name=shop, shop_code=code)
         user = User(seller=seller, email=email, password_hash=hash_password(DEMO_PASSWORD))
         db.add(user)
+        db.flush()
+        db.add(Membership(user_id=user.id, seller_id=seller.id, role="owner"))
         db.commit()
     return user
+
+
+def _ensure_member(db: Session, *, email: str, seller_id: int, role: str) -> None:
+    """Give `email` (created if needed) a role in a shop (idempotent)."""
+    user = db.scalar(select(User).where(User.email == email))
+    if user is None:
+        user = User(seller_id=seller_id, email=email, password_hash=hash_password(DEMO_PASSWORD))
+        db.add(user)
+        db.flush()
+    if db.get(Membership, {"user_id": user.id, "seller_id": seller_id}) is None:
+        db.add(Membership(user_id=user.id, seller_id=seller_id, role=role))
+    db.commit()
 
 
 def seed(db: Session, days: int = 120, today: date | None = None) -> dict[str, int]:
     today = today or date.today()
     user = _get_or_create_user(db, DEMO_EMAIL, "Demo Gadgets Store", "demo-gadgets")
-    if db.scalar(select(User.id).where(User.email == VIEWER_EMAIL)) is None:
-        db.add(
-            User(
-                seller_id=user.seller_id,
-                email=VIEWER_EMAIL,
-                password_hash=hash_password(DEMO_PASSWORD),
-                role="viewer",
-            )
-        )
-        db.commit()
+    _ensure_member(db, email=VIEWER_EMAIL, seller_id=user.seller_id, role="viewer")
     # Dates are relative to "today": re-seeding on another day would create new fake
     # orders, so the demo is loaded only once.
     if db.scalar(select(Order.id).where(Order.seller_id == user.seller_id).limit(1)):
@@ -214,8 +220,10 @@ def seed(db: Session, days: int = 120, today: date | None = None) -> dict[str, i
         )
     db.commit()
 
-    # A second, tiny shop proves tenant isolation in the demo.
+    # A second, tiny shop proves tenant isolation in the demo. The demo owner is also
+    # a manager there, to show the shop switcher; its own owner cannot see the demo shop.
     other = _get_or_create_user(db, SECOND_EMAIL, "Another Shop", "another-shop")
+    _ensure_member(db, email=DEMO_EMAIL, seller_id=other.seller_id, role="manager")
     other_csv = generate_csv(10, today, seed=7)
     other_rows = parse_file(other_csv, "other.csv", max_rows=100_000)
     import_orders(

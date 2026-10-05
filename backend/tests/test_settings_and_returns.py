@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
-from app.models import Product, User
+from app.models import Membership, Product
 from app.services.alerts import compute_alerts
 from tests.factories import Line, build_csv
 
@@ -71,7 +71,7 @@ def test_invalid_settings_rejected(client: TestClient, auth_headers: dict[str, s
 def test_viewer_cannot_change_settings(
     client: TestClient, auth_headers: dict[str, str], db: Session
 ) -> None:
-    db.execute(update(User).values(role="viewer"))
+    db.execute(update(Membership).values(role="viewer"))
     db.commit()
     assert client.get("/api/settings", headers=auth_headers).status_code == 200
     resp = client.patch("/api/settings", headers=auth_headers, json={"stalled_days": 5})

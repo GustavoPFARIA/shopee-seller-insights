@@ -8,7 +8,7 @@ from sqlalchemy import delete, select
 from app.config import get_settings
 from app.deps import CurrentUser, DbSession, OwnerUser, rate_limit
 from app.mailer import MailError, send_email
-from app.models import Invitation, User
+from app.models import Invitation, Membership, User
 from app.schemas import InvitationCreate, InvitationCreated, InvitationOut, MemberOut, MemberUpdate
 from app.services import members
 
@@ -25,19 +25,32 @@ def _raise(exc: members.MembershipError) -> NoReturn:
     raise HTTPException(exc.status_code, exc.message) from exc
 
 
-@router.get("", response_model=list[MemberOut])
-def list_members(user: CurrentUser, db: DbSession) -> list[User]:
-    return list(
-        db.scalars(select(User).where(User.seller_id == user.seller_id).order_by(User.created_at))
+def _member_out(user: User, membership: Membership) -> MemberOut:
+    return MemberOut(
+        id=user.id, email=user.email, role=membership.role, created_at=membership.created_at
     )
 
 
+@router.get("", response_model=list[MemberOut])
+def list_members(user: CurrentUser, db: DbSession) -> list[MemberOut]:
+    rows = db.execute(
+        select(User, Membership)
+        .join(Membership, Membership.user_id == User.id)
+        .where(Membership.seller_id == user.seller_id)
+        .order_by(Membership.created_at, User.id)
+    ).all()
+    return [_member_out(u, m) for u, m in rows]
+
+
 @router.patch("/{user_id}", response_model=MemberOut)
-def update_member(user_id: int, body: MemberUpdate, owner: OwnerUser, db: DbSession) -> User:
+def update_member(user_id: int, body: MemberUpdate, owner: OwnerUser, db: DbSession) -> MemberOut:
     try:
-        return members.change_role(db, seller_id=owner.seller_id, user_id=user_id, role=body.role)
+        membership = members.change_role(
+            db, seller_id=owner.seller_id, user_id=user_id, role=body.role
+        )
     except members.MembershipError as exc:
         _raise(exc)
+    return _member_out(membership.user, membership)
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

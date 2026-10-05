@@ -10,6 +10,7 @@ from app.api import (
     metrics,
     products,
     shopee,
+    shops,
     summary,
     uploads,
 )
@@ -45,6 +46,7 @@ def create_app() -> FastAPI:
     app.include_router(members.router)
     app.include_router(shopee.router)
     app.include_router(settings_api.router)
+    app.include_router(shops.router)
 
     @app.get("/api/health", tags=["health"])
     def health() -> dict[str, str]:

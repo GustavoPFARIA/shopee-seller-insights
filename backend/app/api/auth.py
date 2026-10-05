@@ -1,7 +1,5 @@
 """Registration, login, token refresh, logout and current-user endpoints."""
 
-import re
-import secrets
 from typing import Annotated
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response, status
@@ -11,8 +9,8 @@ from sqlalchemy import select
 
 from app.config import get_settings
 from app.deps import CurrentUser, DbSession, rate_limit
-from app.models import Seller, User
-from app.schemas import AcceptInvitation, MeResponse, RegisterRequest, TokenResponse
+from app.models import Membership, Seller, User
+from app.schemas import AcceptInvitation, MeResponse, RegisterRequest, ShopRef, TokenResponse
 from app.security import create_access_token, hash_password, verify_password
 from app.services import members, sessions
 
@@ -67,11 +65,6 @@ def _start_session(db: DbSession, response: Response, user_id: int) -> TokenResp
     return TokenResponse(access_token=create_access_token(user_id))
 
 
-def _shop_code(name: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40] or "shop"
-    return f"{slug}-{secrets.token_hex(4)}"
-
-
 @router.post(
     "/register",
     response_model=TokenResponse,
@@ -82,11 +75,11 @@ def register(body: RegisterRequest, db: DbSession, response: Response) -> TokenR
     email = body.email.lower()
     if db.scalar(select(User.id).where(User.email == email)) is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "E-mail already registered")
-    seller = Seller(name=body.shop_name, shop_code=_shop_code(body.shop_name))
-    user = User(
-        seller=seller, email=email, password_hash=hash_password(body.password), role="owner"
-    )
+    seller = Seller(name=body.shop_name, shop_code=members.new_shop_code(body.shop_name))
+    user = User(seller=seller, email=email, password_hash=hash_password(body.password))
     db.add(user)
+    db.flush()
+    db.add(Membership(user_id=user.id, seller_id=seller.id, role="owner"))
     db.commit()
     return _start_session(db, response, user.id)
 
@@ -146,12 +139,19 @@ def logout(
 
 
 @router.get("/me", response_model=MeResponse)
-def me(user: CurrentUser) -> MeResponse:
+def me(user: CurrentUser, db: DbSession) -> MeResponse:
+    shops = db.execute(
+        select(Seller.id, Seller.name, Membership.role)
+        .join(Membership, Membership.seller_id == Seller.id)
+        .where(Membership.user_id == user.id)
+        .order_by(Seller.name, Seller.id)
+    ).all()
     return MeResponse(
         email=user.email,
         seller_id=user.seller_id,
         shop_name=user.seller.name,
         role=user.role,
+        shops=[ShopRef(id=i, name=n, role=r) for i, n, r in shops],
     )
 
 
@@ -163,7 +163,9 @@ def me(user: CurrentUser) -> MeResponse:
 )
 def accept_invite(body: AcceptInvitation, db: DbSession, response: Response) -> TokenResponse:
     try:
-        user = members.accept_invitation(db, body.token, body.password)
+        user, shop_id = members.accept_invitation(db, body.token, body.password)
     except members.MembershipError as exc:
         raise HTTPException(exc.status_code, exc.message) from exc
-    return _start_session(db, response, user.id)
+    token = _start_session(db, response, user.id)
+    token.shop_id = shop_id  # the client switches to the shop that invited them
+    return token

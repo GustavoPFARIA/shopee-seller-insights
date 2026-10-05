@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.mailer import MailError, send_email
-from app.models import Seller, User
+from app.models import Membership, Seller, User
 from app.services import ai_summary
 
 log = logging.getLogger(__name__)
@@ -95,7 +95,11 @@ def recipients(db: Session, seller_id: int) -> list[str]:
     return list(
         db.scalars(
             select(User.email)
-            .where(User.seller_id == seller_id, User.role.in_(("owner", "manager")))
+            .join(Membership, Membership.user_id == User.id)
+            .where(
+                Membership.seller_id == seller_id,
+                Membership.role.in_(("owner", "manager")),
+            )
             .order_by(User.email)
         )
     )

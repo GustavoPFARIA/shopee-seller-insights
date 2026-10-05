@@ -63,18 +63,36 @@ ROLES = ("owner", "manager", "viewer")
 
 
 class User(Base):
+    """A person who signs in. Access to shops is granted by memberships."""
+
     __tablename__ = "users"
-    __table_args__ = (
-        CheckConstraint("role IN ('owner', 'manager', 'viewer')", name="ck_users_role"),
-    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # Default shop, opened after sign-in when the client does not choose one.
     seller_id: Mapped[int] = mapped_column(ForeignKey("sellers.id", ondelete="CASCADE"), index=True)
     email: Mapped[str] = mapped_column(String(254), unique=True)
     password_hash: Mapped[str] = mapped_column(String(255))
-    role: Mapped[str] = mapped_column(String(16), default="owner", server_default="owner")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
+    seller: Mapped[Seller] = relationship()
+
+
+class Membership(Base):
+    """A user's role in one shop. A user can belong to several shops."""
+
+    __tablename__ = "memberships"
+    __table_args__ = (
+        PrimaryKeyConstraint("user_id", "seller_id", name="pk_memberships"),
+        CheckConstraint("role IN ('owner', 'manager', 'viewer')", name="ck_memberships_role"),
+        Index("ix_memberships_seller_id", "seller_id"),
+    )
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    seller_id: Mapped[int] = mapped_column(ForeignKey("sellers.id", ondelete="CASCADE"))
+    role: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    user: Mapped[User] = relationship()
     seller: Mapped[Seller] = relationship()
 
 

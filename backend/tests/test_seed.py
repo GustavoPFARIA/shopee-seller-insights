@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import seed as seed_module
-from app.models import Order, Product, Seller, User
+from app.models import Membership, Order, Product, Seller, User
 from app.services.alerts import compute_alerts
 from app.services.importer import parse_file
 from app.services.metrics import abc_curve
@@ -28,8 +28,16 @@ def test_seed_is_idempotent_and_realistic(db: Session) -> None:
     second = seed_module.seed(db, days=60, today=TODAY)
     assert second["orders_created"] == 0
     assert db.scalar(select(func.count()).select_from(Seller)) == 2
-    viewer = db.scalar(select(User).where(User.email == seed_module.VIEWER_EMAIL))
-    assert viewer is not None and viewer.role == "viewer"
+    roles = {
+        email: role
+        for email, role in db.execute(
+            select(User.email, Membership.role)
+            .join(Membership, Membership.user_id == User.id)
+            .where(Membership.seller_id == demo_seller_id_for(db))
+        )
+    }
+    assert roles[seed_module.VIEWER_EMAIL] == "viewer"
+    assert roles[seed_module.DEMO_EMAIL] == "owner"
 
     demo_seller = db.scalar(select(Seller.id).where(Seller.shop_code == "demo-gadgets"))
     assert demo_seller is not None
@@ -63,3 +71,9 @@ def test_main_seeds_database(
     out = capsys.readouterr().out
     assert "Demo accounts" in out
     assert seed_module.DEMO_PASSWORD not in out
+
+
+def demo_seller_id_for(db: Session) -> int:
+    seller_id = db.scalar(select(Seller.id).where(Seller.shop_code == "demo-gadgets"))
+    assert seller_id is not None
+    return seller_id
