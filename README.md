@@ -104,10 +104,14 @@ backend/
     seed.py         fake demo data generator
   alembic/          migrations (the only way the schema changes)
   tests/            pytest suite on real PostgreSQL, plus a fake Shopee that checks signatures
+  benchmarks/       performance benchmark on a large synthetic dataset
 frontend/
   src/              React app (api.ts typed client, pages/, components/)
   nginx.conf        static serving, /api proxy, security headers
 db/init/            creates the least-privilege application role
+scripts/
+  verify.sh         one command for every check (static, test, security, e2e, perf)
+  smoke_test.py     end-to-end checks against a running stack, through nginx
 ```
 
 ## Database schema
@@ -320,6 +324,37 @@ For anything beyond a local demo:
 cp .env.example .env   # then fill in real secrets (and Shopee credentials, if any)
 ```
 
+To stop the stack, run `docker compose down`. Adding `-v` also deletes the database
+volume, and the demo data is loaded again on the next start.
+
+### Configuration
+
+All settings are environment variables, read by `pydantic-settings` and validated at
+startup. Invalid values stop the API with a clear error.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `APP_ENV` | `development` | `production` refuses dev-only secrets and `COOKIE_SECURE=false`, and hides Swagger. |
+| `DATABASE_URL` | – | Connection for the API and worker, using the least-privilege `ssi_app` role. |
+| `MIGRATION_DATABASE_URL` | – | Connection for Alembic, using the schema owner role. |
+| `JWT_SECRET` | – (required, ≥ 32 chars) | Signs access tokens. |
+| `PII_HASH_SECRET` | – (required, ≥ 32 chars) | Key for pseudonymizing buyer usernames. Changing it breaks the link with buyers already stored. |
+| `ACCESS_TOKEN_MINUTES` / `REFRESH_TOKEN_DAYS` | `15` / `7` | Session lifetimes. |
+| `COOKIE_SECURE` | `true` | Send the refresh cookie over HTTPS only. Set `false` only for a local http demo. |
+| `REPORT_TIMEZONE` | `America/Sao_Paulo` | Time zone used to group sales by calendar day. |
+| `CORS_ORIGINS` | `["http://localhost:8080", "http://localhost:5173"]` | Browser origins allowed to call the API directly. |
+| `MAX_UPLOAD_MB` / `MAX_UPLOAD_ROWS` | `5` / `50000` | Upload limits. |
+| `LOGIN_RATE_LIMIT` / `LOGIN_RATE_WINDOW_SECONDS` | `5` / `60` | Login, register and accept-invite attempts per client IP. |
+| `UPLOAD_RATE_LIMIT` / `UPLOAD_RATE_WINDOW_SECONDS` | `10` / `3600` | Limit per client IP, applied separately to uploads, AI summaries, Shopee syncs and invitations. |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | The only proxy address whose `X-Forwarded-For` header is trusted. Compose sets it to nginx's address. |
+| `SEED_DEMO_DATA` | `true` (compose) | Load the fake demo shop on first start. |
+| `ANTHROPIC_API_KEY` | empty | Enables the AI weekly summary. |
+| `SHOPEE_PARTNER_ID`, `SHOPEE_PARTNER_KEY`, `TOKEN_ENCRYPTION_KEY` | empty | Enable the Shopee integration. All three are required. |
+| `SHOPEE_API_HOST` | Shopee test environment | Production: `https://partner.shopeemobile.com`. |
+| `SHOPEE_REDIRECT_URL` | `http://localhost:8080/api/shopee/callback` | Must match the URL registered on the Shopee console. |
+| `SHOPEE_SYNC_INTERVAL_MINUTES` / `SHOPEE_BACKFILL_DAYS` | `30` / `90` | Scheduled sync interval and first-sync history. |
+| `WEB_PORT` | `8080` | Host port of the web app (compose only). |
+
 ### Local development without Docker
 
 ```bash
@@ -338,42 +373,102 @@ uvicorn app.main:app --reload
 cd ../frontend && npm ci && npm run dev   # http://localhost:5173 (proxies /api to :8000)
 ```
 
-## Tests and quality
+## Verification
+
+One command checks the whole project. CI runs the same script on every push.
 
 ```bash
-cd backend
-ruff check . && ruff format --check . && mypy app tests   # mypy in strict mode
-pytest                                                     # fails below 85% coverage
-cd ../frontend && npm run lint && npm run build
+scripts/verify.sh            # everything (about 5 minutes)
+scripts/verify.sh static     # lint, format, strict typing, frontend lint + build
+scripts/verify.sh test       # backend tests on a real PostgreSQL
+scripts/verify.sh security   # pip-audit, npm audit, gitleaks, no committed secrets
+scripts/verify.sh e2e        # fresh docker compose stack + 43-check smoke test
+scripts/verify.sh perf       # benchmark on a large synthetic dataset
 ```
 
-The backend suite has 169 tests at ~98% coverage. It runs against a **real
-PostgreSQL 16**, using the real Alembic migrations. It covers:
+The script starts a temporary PostgreSQL container when `TEST_DATABASE_URL` is not
+set. The e2e stage runs a separate compose project (`ssi-verify`) on port 18080 and
+deletes its volumes at the end, so it never touches your demo data.
 
-- idempotent re-upload and sync
+### What each stage proves
+
+| Stage | Checks |
+|---|---|
+| `static` | `ruff` lint and format, `mypy --strict` on app, tests and benchmarks, frontend lint, TypeScript type check and production build. |
+| `test` | 170 backend tests with ≥ 85% coverage (currently ~98%), on a real PostgreSQL 16 with the real migrations. Also checks that the migrations match the models (`alembic check`) and that every migration can be rolled back and applied again. |
+| `security` | Known-vulnerability audit of Python and npm dependencies; a gitleaks secret scan of the full git history; no `.env`, key or certificate files tracked by git. |
+| `e2e` | Builds the images and starts the stack from scratch, then runs [`scripts/smoke_test.py`](scripts/smoke_test.py) through nginx, the way a user (and an attacker) would. It also checks that the worker is running and that no token or password appears in the logs. |
+| `perf` | Loads a large synthetic dataset, measures p50/p95 latency of every read endpoint and the time of a maximum-size upload, prints the PostgreSQL query plan, and fails if a p95 exceeds the budget. |
+
+The backend tests cover:
+
+- idempotent re-upload and Shopee sync, including two uploads racing each other
 - fee allocation and margin math, checked by hand
-- ABC thresholds and local-day boundaries
+- ABC thresholds and local-day boundaries in the seller's time zone
 - cross-seller isolation on every endpoint
-- auth failures and refresh-token reuse detection
-- role permissions
+- authentication failures, refresh-token rotation and reuse detection
+- role permissions and the last-owner rule
 - rate limits
 - oversized, disguised and formula-injection uploads
-- PII never stored
+- personal data never stored
 - the AI payload carrying aggregates only
+- no Shopee token ever written to the logs
 
 The Shopee tests run against a **fake Shopee Open Platform**
 ([`tests/fake_shopee.py`](backend/tests/fake_shopee.py)). Like the real API, it checks
 every HMAC signature and timestamp, enforces the 15-day window, paginates and can inject
 failures such as 429s and expired tokens.
 
-CI (GitHub Actions) runs these jobs:
+The smoke test groups its 43 checks into eight areas:
 
-- backend lint and strict typecheck
-- tests with a PostgreSQL service, plus `alembic check` (migrations match the models)
-- frontend lint and build
-- Docker image build
-- `pip-audit` and `npm audit`
-- a gitleaks scan of the full git history
+1. **HTTP security headers:** CSP, `nosniff`, `Referrer-Policy`, and the nginx version
+   hidden.
+2. **Network exposure:** the database and API ports are not published on the host.
+3. **Sessions:**
+   - wrong passwords are rejected and the refresh cookie flags are correct;
+   - refresh without the CSRF header is rejected;
+   - refresh after logout fails.
+4. **Metrics:** the demo data loads and the metrics, ABC curve and alerts all respond.
+5. **Uploads:**
+   - the sample export imports, and importing it twice creates no new orders;
+   - formula injection, a disguised binary and a file over 5 MB are all rejected.
+6. **Isolation:** another shop can neither see nor edit the demo shop's data, and a
+   viewer cannot upload or invite.
+7. **Optional integrations:** the AI summary and Shopee endpoints answer even without
+   credentials.
+8. **Brute force:** login is rate limited even when `X-Forwarded-For` is spoofed.
+
+### Performance
+
+Measured with `scripts/verify.sh perf` and `PERF_ORDERS=200000`. The database held
+400,000 orders and 510,000 items across 21 shops; the largest shop has 200,000 orders
+and 500 products. Latencies are in-process (application + PostgreSQL) on a laptop-class
+machine.
+
+| Operation | p95 |
+|---|---|
+| Overview with period comparison, 30 days / 365 days | 126 ms / 374 ms |
+| Real margin per product, 365 days | 116 ms |
+| ABC curve, 365 days | 133 ms |
+| Daily revenue, 365 days | 224 ms |
+| Alerts | 157 ms |
+| Upload of the largest allowed file (50,000 rows, 3.8 MB) | 11 s |
+| Re-upload of the same file (nothing new to write) | 1.8 s |
+
+Design choices behind these numbers:
+
+- **Period filters use the index.** A period is converted once into a UTC range (local
+  midnight to local midnight), so PostgreSQL uses the `(seller_id, ordered_at)` index
+  instead of converting the time zone of every row.
+- **One query for the headline numbers.** Revenue, orders, units and net margin come
+  from a single aggregate query per period.
+- **Set-based imports.** Each chunk of 2,000 orders takes one `SELECT` for existing
+  orders, one bulk status `UPDATE`, one `INSERT … ON CONFLICT DO NOTHING` and one bulk
+  item insert. The first version wrote one order per round trip and took 167 s for the
+  same file.
+
+CI runs the benchmark with 50,000 orders and a 1.5 s budget, because shared runners
+are slower and noisier.
 
 ## Roadmap
 

@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Literal
 
-from sqlalchemy import ColumnElement, Date, Select, cast, func, select
+from sqlalchemy import ColumnElement, Date, DateTime, Select, cast, func, literal, select
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
 from app.config import get_settings
@@ -26,9 +26,18 @@ def local_day(
     return cast(func.timezone(get_settings().report_timezone, column), Date)
 
 
+def _local_midnight(day: date) -> ColumnElement[datetime]:
+    """UTC instant of 00:00 on `day` in the reporting time zone (computed by PostgreSQL)."""
+    return func.timezone(get_settings().report_timezone, cast(literal(day), DateTime))
+
+
 def _revenue_items(seller_id: int, start: date, end: date) -> Select[OrderItem]:
-    """Base filter shared by every metric: seller scope, revenue statuses, period."""
-    day = local_day(Order.ordered_at)
+    """Base filter shared by every metric: seller scope, revenue statuses, period.
+
+    The period is a half-open UTC range [local midnight of start, local midnight of
+    end + 1). Comparing the raw column (instead of converting every row to a local
+    date) lets PostgreSQL use the (seller_id, ordered_at) index.
+    """
     return (
         select(OrderItem)
         .join(Order, Order.id == OrderItem.order_id)
@@ -37,8 +46,8 @@ def _revenue_items(seller_id: int, start: date, end: date) -> Select[OrderItem]:
             Order.seller_id == seller_id,
             Product.seller_id == seller_id,  # defense in depth
             Order.status.not_in(NON_REVENUE_STATUSES),
-            day >= start,
-            day <= end,
+            Order.ordered_at >= _local_midnight(start),
+            Order.ordered_at < _local_midnight(end + timedelta(days=1)),
         )
     )
 
@@ -53,29 +62,28 @@ FEES = (
 
 
 def kpis(db: Session, seller_id: int, start: date, end: date) -> KpiValues:
-    base = _revenue_items(seller_id, start, end).subquery()
+    """Headline numbers in a single aggregate query.
+
+    Net margin = revenue - all fees - unit cost x units over every sold item. It is
+    None when any sold product has no cost informed (a partial sum would mislead).
+    """
     row = db.execute(
-        select(
-            func.coalesce(func.sum(base.c.quantity * base.c.unit_price), 0),
-            func.count(func.distinct(base.c.order_id)),
-            func.coalesce(func.sum(base.c.quantity), 0),
+        _revenue_items(seller_id, start, end).with_only_columns(
+            func.coalesce(func.sum(GROSS), 0),
+            func.count(func.distinct(OrderItem.order_id)),
+            func.coalesce(func.sum(OrderItem.quantity), 0),
+            func.coalesce(func.sum(GROSS - FEES - OrderItem.quantity * Product.unit_cost), 0),
+            func.coalesce(func.bool_or(Product.unit_cost.is_(None)), False),
         )
     ).one()
     revenue = Decimal(row[0]).quantize(CENT)
     orders = int(row[1])
-    products = product_metrics(db, seller_id, start, end)
-    margins = [p.margin for p in products]
-    net_margin = (
-        sum((m for m in margins if m is not None), ZERO)
-        if all(m is not None for m in margins)
-        else None
-    )
     return KpiValues(
         revenue=revenue,
         orders=orders,
         units=int(row[2]),
         avg_ticket=(revenue / orders).quantize(CENT) if orders else ZERO,
-        net_margin=net_margin,
+        net_margin=None if row[4] else Decimal(row[3]).quantize(CENT),
     )
 
 

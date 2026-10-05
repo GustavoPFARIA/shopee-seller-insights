@@ -14,6 +14,8 @@ select = ["E", "F", "W", "I", "B", "UP", "S", "N", "SIM", "RUF"]
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106"]
 "alembic/versions/**" = ["E501"]
+# Benchmark script: asserts are checks, random is synthetic data, long table lines.
+"benchmarks/**" = ["S101", "S311", "E501"]
 
 [tool.mypy]
 python_version = "3.12"

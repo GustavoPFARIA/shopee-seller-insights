@@ -241,8 +241,8 @@ def main() -> None:
     with get_sessionmaker()() as db:
         result = seed(db, days=args.days)
     print(f"Seed complete: {result['orders_created']} new orders ({result['rows']} rows).")
-    print(f"Demo login: {DEMO_EMAIL} / {DEMO_PASSWORD} (owner)")
-    print(f"Read-only demo login: {VIEWER_EMAIL} / {DEMO_PASSWORD} (viewer)")
+    # Never print passwords, not even the public demo one: the password is in the README.
+    print(f"Demo accounts: {DEMO_EMAIL} (owner), {VIEWER_EMAIL} (viewer); see README")
 
 
 if __name__ == "__main__":  # pragma: no cover

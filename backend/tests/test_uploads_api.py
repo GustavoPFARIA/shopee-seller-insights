@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
@@ -151,3 +152,29 @@ def test_upload_rate_limited(client: TestClient, auth_headers: dict[str, str]) -
     codes = [_upload(client, auth_headers, b"", "e.csv")[0] for _ in range(limit + 1)]
     assert codes[-1] == 429
     assert 429 not in codes[:limit]
+
+
+def test_concurrent_upload_race_counts_existing_as_unchanged(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Orders inserted by another upload between our SELECT and INSERT are not duplicated."""
+    import sqlalchemy
+
+    _upload(client, auth_headers, build_csv(SAMPLE))
+    real_select = sqlalchemy.select
+
+    def select_hiding_orders(*cols: object) -> object:
+        stmt = real_select(*cols)  # type: ignore[call-overload]
+        if cols and getattr(cols[0], "key", None) == "order_sn":
+            return stmt.where(False)  # simulate "not there yet" when we looked
+        return stmt
+
+    monkeypatch.setattr("app.services.importer.select", select_hiding_orders)
+    code, body = _upload(client, auth_headers, build_csv(SAMPLE))
+    assert code == 201, body
+    assert (body["orders_created"], body["orders_unchanged"]) == (0, 2)
+    assert db.scalar(select(func.count()).select_from(Order)) == 2
+    assert db.scalar(select(func.count()).select_from(OrderItem)) == 3

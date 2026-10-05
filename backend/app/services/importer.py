@@ -16,7 +16,7 @@ from typing import Annotated, Any, Literal, get_args
 
 import pandas as pd
 from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, ValidationError
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -29,6 +29,8 @@ CENT = Decimal("0.01")
 SHOPEE_BR_TZ = timezone(timedelta(hours=-3))
 MAX_XLSX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
 MAX_REPORTED_ERRORS = 20
+# Orders written per statement batch (keeps IN lists and parameter counts bounded).
+WRITE_CHUNK = 2_000
 
 # Canonical field -> accepted headers (Portuguese Seller Centre BR and English export).
 COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
@@ -340,37 +342,70 @@ def import_orders(
     db.add(upload)
     db.flush()
 
-    for order_sn, lines in by_order.items():
-        head = lines[0]
-        inserted_id = db.scalar(
-            insert(Order)
-            .values(
-                seller_id=seller_id,
-                upload_id=upload.id,
-                order_sn=order_sn,
-                status=head.status,
-                ordered_at=head.ordered_at,
-                buyer_hash=pseudonymize(head.buyer_username) if head.buyer_username else None,
-                created_at=datetime.now(UTC),
+    # Set-based writes: a few statements per chunk instead of one round trip per order.
+    order_sns = list(by_order)
+    for chunk_start in range(0, len(order_sns), WRITE_CHUNK):
+        chunk = order_sns[chunk_start : chunk_start + WRITE_CHUNK]
+        existing = {
+            sn: (oid, status)
+            for sn, oid, status in db.execute(
+                select(Order.order_sn, Order.id, Order.status).where(
+                    Order.seller_id == seller_id, Order.order_sn.in_(chunk)
+                )
             )
-            .on_conflict_do_nothing(constraint="uq_orders_seller_order_sn")
-            .returning(Order.id)
-        )
-        if inserted_id is None:
-            existing = db.scalars(
-                select(Order).where(Order.seller_id == seller_id, Order.order_sn == order_sn)
-            ).one()
-            if existing.status != head.status:
-                existing.status = head.status
-                upload.orders_updated += 1
-            else:
-                upload.orders_unchanged += 1
+        }
+        status_changes = [
+            {"id": existing[sn][0], "status": by_order[sn][0].status}
+            for sn in chunk
+            if sn in existing and existing[sn][1] != by_order[sn][0].status
+        ]
+        if status_changes:
+            db.execute(update(Order), status_changes)  # bulk UPDATE by primary key
+        upload.orders_updated += len(status_changes)
+        upload.orders_unchanged += sum(1 for sn in chunk if sn in existing) - len(status_changes)
+
+        new_sns = [sn for sn in chunk if sn not in existing]
+        if not new_sns:
             continue
-        upload.orders_created += 1
-        db.add_all(_build_items(inserted_id, lines, product_ids))
+        now = datetime.now(UTC)
+        # Core executemany ("insertmanyvalues"): compiled once, sent in batches.
+        conn = db.connection()
+        inserted = conn.execute(
+            insert(Order)
+            .on_conflict_do_nothing(constraint="uq_orders_seller_order_sn")
+            .returning(Order.order_sn, Order.id),
+            [
+                {
+                    "seller_id": seller_id,
+                    "upload_id": upload.id,
+                    "order_sn": sn,
+                    "status": by_order[sn][0].status,
+                    "ordered_at": by_order[sn][0].ordered_at,
+                    "buyer_hash": _buyer_hash(by_order[sn][0]),
+                    "created_at": now,
+                    "source": "file",
+                    "fees_final": False,
+                }
+                for sn in new_sns
+            ],
+        ).all()
+        # Orders inserted meanwhile by a concurrent upload are already stored: unchanged.
+        upload.orders_unchanged += len(new_sns) - len(inserted)
+        upload.orders_created += len(inserted)
+        items = [
+            item
+            for sn, order_id in inserted
+            for item in _build_items(order_id, by_order[sn], product_ids)
+        ]
+        if items:
+            conn.execute(insert(OrderItem), items)
 
     db.commit()
     return ImportSummary(upload=upload, products_created=products_created)
+
+
+def _buyer_hash(row: OrderRow) -> str | None:
+    return pseudonymize(row.buyer_username) if row.buyer_username else None
 
 
 @dataclass
@@ -422,20 +457,20 @@ def upsert_api_orders(
                 order_sn=order_sn,
                 status=head.status,
                 ordered_at=head.ordered_at,
-                buyer_hash=pseudonymize(head.buyer_username) if head.buyer_username else None,
+                buyer_hash=_buyer_hash(head),
                 source="shopee_api",
                 fees_final=order_sn in fees_final,
             )
             db.add(order)
             db.flush()
-            db.add_all(_build_items(order.id, lines, product_ids))
+            db.execute(insert(OrderItem), _build_items(order.id, lines, product_ids))
             summary.created += 1
             continue
         changed = order.status != head.status
         order.status = head.status
         if order_sn in refresh_fees:
             db.execute(delete(OrderItem).where(OrderItem.order_id == order.id))
-            db.add_all(_build_items(order.id, lines, product_ids))
+            db.execute(insert(OrderItem), _build_items(order.id, lines, product_ids))
             order.fees_final = order_sn in fees_final
             changed = True
         if changed:
@@ -474,7 +509,8 @@ def _ensure_products(db: Session, seller_id: int, rows: list[OrderRow]) -> int:
 
 def _build_items(
     order_id: int, lines: list[OrderRow], product_ids: dict[str, int]
-) -> list[OrderItem]:
+) -> list[dict[str, Any]]:
+    """Item rows for one order, ready for a bulk INSERT."""
     # Merge repeated SKU lines (same price, validated earlier).
     merged: dict[str, OrderRow] = {}
     for line in lines:
@@ -492,15 +528,15 @@ def _build_items(
         for fee in ("commission_fee", "service_fee", "seller_shipping_fee", "seller_voucher")
     }
     return [
-        OrderItem(
-            order_id=order_id,
-            product_id=product_ids[item.sku],
-            quantity=item.quantity,
-            unit_price=item.unit_price,
-            commission_fee=fee_shares["commission_fee"][idx],
-            service_fee=fee_shares["service_fee"][idx],
-            seller_shipping_fee=fee_shares["seller_shipping_fee"][idx],
-            seller_voucher=fee_shares["seller_voucher"][idx],
-        )
+        {
+            "order_id": order_id,
+            "product_id": product_ids[item.sku],
+            "quantity": item.quantity,
+            "unit_price": item.unit_price,
+            "commission_fee": fee_shares["commission_fee"][idx],
+            "service_fee": fee_shares["service_fee"][idx],
+            "seller_shipping_fee": fee_shares["seller_shipping_fee"][idx],
+            "seller_voucher": fee_shares["seller_voucher"][idx],
+        }
         for idx, item in enumerate(items)
     ]

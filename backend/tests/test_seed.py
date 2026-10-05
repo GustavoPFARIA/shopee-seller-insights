@@ -60,4 +60,6 @@ def test_main_seeds_database(
 ) -> None:
     monkeypatch.setattr("sys.argv", ["seed", "--days", "3"])
     seed_module.main()
-    assert "Demo login" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Demo accounts" in out
+    assert seed_module.DEMO_PASSWORD not in out

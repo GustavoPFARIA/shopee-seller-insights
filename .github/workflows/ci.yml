@@ -81,12 +81,46 @@ jobs:
       - run: npm run lint
       - run: npm run build
 
-  docker-build:
-    name: Docker images build
+  e2e:
+    name: End-to-end (docker compose + smoke test)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - run: docker compose build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Builds the images from a clean clone, starts the full stack with fresh
+      # volumes, runs scripts/smoke_test.py through nginx and checks the logs.
+      - run: scripts/verify.sh e2e
+
+  performance:
+    name: Performance budget (50k orders)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: shopee_insights_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/shopee_insights_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install -r backend/requirements-dev.txt
+      # Shared CI runners are slower and noisier than a laptop: generous budget.
+      - run: PERF_BUDGET_MS=1500 scripts/verify.sh perf
 
   dependency-audit:
     name: Dependency audit
