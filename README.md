@@ -1,12 +1,35 @@
 # Shopee Seller Insights
 
 [![CI](https://github.com/GustavoPFARIA/shopee-seller-insights/actions/workflows/ci.yml/badge.svg)](https://github.com/GustavoPFARIA/shopee-seller-insights/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/GustavoPFARIA/shopee-seller-insights)](https://github.com/GustavoPFARIA/shopee-seller-insights/releases)
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
+![React](https://img.shields.io/badge/React-19-20232A?logo=react)
+![Claude](https://img.shields.io/badge/LLM-Claude-D97757)
+![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+![Dashboard](docs/screenshots/dashboard.png)
 
 Sales analytics for small Shopee sellers. Connect a shop through the **Shopee Open
 Platform API** or upload the order report from Seller Centre. The app then shows revenue,
 **real margin per product** (after Shopee commission, service and transaction fees,
 seller-paid shipping, coupons and product cost), the ABC curve, period comparison and
 alerts you can act on.
+
+### Highlights for reviewers
+
+- **Grounded LLM feature, not a chatbot wrapper.** The weekly summary is written by
+  Claude from a small JSON of pre-computed aggregates. Every number comes from SQL, the
+  model only explains them, and no order or customer data ever reaches the model
+  (asserted by a test). The feature turns itself off without an API key.
+- **Data pipeline you can trust.** Messy marketplace exports and a signed third-party
+  API (OAuth, HMAC, webhooks) become one clean, idempotent dataset that the metrics,
+  the alerts and the LLM all read from.
+- **Production engineering.** Multi-tenant isolation, LGPD-minded PII handling, a
+  background worker, 216 backend + 16 frontend tests, a 52-check end-to-end smoke test
+  and a performance budget in CI.
 
 ## The problem
 
