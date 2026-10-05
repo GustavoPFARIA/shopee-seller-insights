@@ -4,6 +4,7 @@ Used by the API (connect, callback, "Sync now") and by the scheduled worker.
 """
 
 import hashlib
+import hmac
 import logging
 import secrets
 from collections.abc import Callable, Iterator
@@ -472,8 +473,10 @@ def mark_stale_runs(db: Session) -> None:
     db.commit()
 
 
-def request_sync(db: Session, seller_id: int) -> SyncRun:
-    """Queue a manual sync for the worker; reuse a run already queued or running."""
+def request_sync(db: Session, seller_id: int, trigger: str = "manual") -> SyncRun:
+    """Queue a sync for the worker. Requests are coalesced into a run that is still
+    queued; a run already *running* may have started before the change that triggered
+    this request, so a new one is queued after it."""
     if (
         db.scalar(select(ShopeeConnection.id).where(ShopeeConnection.seller_id == seller_id))
         is None
@@ -481,13 +484,47 @@ def request_sync(db: Session, seller_id: int) -> SyncRun:
         raise OAuthError("not_connected")
     pending = db.scalar(
         select(SyncRun)
-        .where(SyncRun.seller_id == seller_id, SyncRun.status.in_(("queued", "running")))
+        .where(SyncRun.seller_id == seller_id, SyncRun.status == "queued")
         .order_by(SyncRun.id.desc())
         .limit(1)
     )
     if pending is not None:
         return pending
-    run = SyncRun(seller_id=seller_id, trigger="manual", status="queued")
+    run = SyncRun(seller_id=seller_id, trigger=trigger, status="queued")
     db.add(run)
     db.commit()
     return run
+
+
+PUSH_ORDER_CODES = {3, 4}  # order status update, tracking number update
+PUSH_DEAUTHORIZED = 2
+
+
+def verify_push_signature(raw_body: bytes, authorization: str | None) -> bool:
+    """Shopee push: Authorization = hex HMAC-SHA256(push key, push URL + "|" + raw body)."""
+    settings = get_settings()
+    key = settings.shopee_push_key or settings.shopee_partner_key
+    if not authorization or key is None:
+        return False
+    base = settings.shopee_push_url.encode() + b"|" + raw_body
+    expected = hmac.new(key.get_secret_value().encode(), base, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, authorization.strip().lower())
+
+
+def handle_push(db: Session, payload: dict[str, object]) -> str:
+    """Act on a verified push. The payload is only a hint: data is re-read via the API."""
+    try:
+        code = int(str(payload.get("code")))
+        shop_id = int(str(payload.get("shop_id")))
+    except ValueError:
+        return "ignored"
+    conn = db.scalar(select(ShopeeConnection).where(ShopeeConnection.shop_id == shop_id))
+    if conn is None:
+        return "unknown_shop"
+    if code in PUSH_ORDER_CODES:
+        request_sync(db, conn.seller_id, trigger="push")
+        return "sync_queued"
+    if code == PUSH_DEAUTHORIZED:
+        disconnect(db, conn.seller_id)
+        return "disconnected"
+    return "ignored"

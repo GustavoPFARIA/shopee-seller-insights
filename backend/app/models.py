@@ -285,7 +285,7 @@ class SyncRun(Base):
         CheckConstraint(
             "status IN ('queued', 'running', 'success', 'error')", name="ck_sync_runs_status"
         ),
-        CheckConstraint("trigger IN ('manual', 'scheduled')", name="ck_sync_runs_trigger"),
+        CheckConstraint("trigger IN ('manual', 'scheduled', 'push')", name="ck_sync_runs_trigger"),
         Index("ix_sync_runs_seller_started", "seller_id", "started_at"),
     )
 

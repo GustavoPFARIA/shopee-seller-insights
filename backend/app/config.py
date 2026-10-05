@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     # Test environment by default; production is https://partner.shopeemobile.com
     shopee_api_host: str = "https://partner.test-stable.shopeemobile.com"
     shopee_redirect_url: str = "http://localhost:8080/api/shopee/callback"
+    # Push (webhook): the URL registered on the Shopee console, used in the signature,
+    # and its key if the console shows one different from the partner key.
+    shopee_push_url: str = "http://localhost:8080/api/shopee/push"
+    shopee_push_key: SecretStr | None = None
     shopee_backfill_days: int = Field(default=90, ge=1, le=365)
     shopee_sync_interval_minutes: int = Field(default=30, ge=5, le=24 * 60)
     # Fernet key (urlsafe base64, 32 bytes) used to encrypt Shopee tokens at rest.
@@ -66,6 +70,7 @@ class Settings(BaseSettings):
     @field_validator(
         "shopee_partner_id",
         "shopee_partner_key",
+        "shopee_push_key",
         "smtp_host",
         "smtp_username",
         "smtp_password",

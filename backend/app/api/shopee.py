@@ -1,9 +1,10 @@
 """Shopee Open Platform connection and synchronization endpoints."""
 
+import json
 import secrets
 from typing import Annotated
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 
@@ -133,3 +134,28 @@ def disconnect(owner: OwnerUser, db: DbSession) -> Response:
     if not shopee_sync.disconnect(db, owner.seller_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No Shopee shop connected")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+MAX_PUSH_BYTES = 64 * 1024
+
+
+@router.post("/push", include_in_schema=False)
+async def push(request: Request, db: DbSession) -> dict[str, int]:
+    """Shopee push notifications (webhook). Only signed requests are accepted.
+
+    The body is never trusted for data: a valid order event just queues a sync of
+    that shop, which reads everything through the signed API.
+    """
+    raw = await request.body()
+    if len(raw) > MAX_PUSH_BYTES:
+        raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "Payload too large")
+    if not shopee_sync.verify_push_signature(raw, request.headers.get("authorization")):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid signature")
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid JSON") from None
+    if isinstance(payload, dict):
+        shopee_sync.handle_push(db, payload)
+    # Always acknowledge a verified push, otherwise Shopee keeps retrying it.
+    return {"code": 0}

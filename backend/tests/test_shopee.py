@@ -633,3 +633,103 @@ def test_long_skus_are_supported(
     assert _sync(client, auth_headers)["orders_created"] == 1
     skus = set(db.scalars(select(Product.sku)))
     assert long_sku in skus and "NEW-" + "Y" * 90 in skus
+
+
+# ---- push (webhook) -----------------------------------------------------------------
+
+PUSH_URL = "http://localhost:8080/api/shopee/push"
+
+
+def _push(client: TestClient, payload: dict, key: str = PARTNER_KEY) -> httpx.Response:  # type: ignore[type-arg]
+    import json as _json
+
+    body = _json.dumps(payload).encode()
+    sig = hmac.new(key.encode(), PUSH_URL.encode() + b"|" + body, hashlib.sha256).hexdigest()
+    return client.post(  # type: ignore[return-value]
+        "/api/shopee/push",
+        content=body,
+        headers={"Authorization": sig, "Content-Type": "application/json"},
+    )
+
+
+def test_push_order_update_queues_sync(
+    client: TestClient, auth_headers: dict[str, str], fake: FakeShopee, db: Session
+) -> None:
+    _connect(client, auth_headers)
+    payload = {
+        "code": 3,
+        "shop_id": SHOP_ID,
+        "timestamp": fake.now,
+        "data": {"ordersn": "X1", "status": "SHIPPED"},
+    }
+    resp = _push(client, payload)
+    assert resp.status_code == 200 and resp.json() == {"code": 0}
+    runs = db.scalars(select(SyncRun)).all()
+    assert [(r.trigger, r.status) for r in runs] == [("push", "queued")]
+    _push(client, payload)  # a burst of pushes is coalesced into one queued run
+    assert len(db.scalars(select(SyncRun)).all()) == 1
+    assert worker.process_queue() == 1
+
+
+def test_push_with_bad_signature_is_rejected(
+    client: TestClient, auth_headers: dict[str, str], fake: FakeShopee, db: Session
+) -> None:
+    _connect(client, auth_headers)
+    payload = {"code": 3, "shop_id": SHOP_ID}
+    assert _push(client, payload, key="wrong-key").status_code == 401
+    no_header = client.post("/api/shopee/push", json=payload)
+    assert no_header.status_code == 401
+    assert db.scalars(select(SyncRun)).all() == []
+
+
+def test_push_deauthorization_disconnects(
+    client: TestClient, auth_headers: dict[str, str], fake: FakeShopee, db: Session
+) -> None:
+    _connect(client, auth_headers)
+    assert _push(client, {"code": 2, "shop_id": SHOP_ID}).status_code == 200
+    assert db.scalar(select(ShopeeConnection)) is None
+
+
+def test_push_edge_cases_are_acknowledged_but_ignored(
+    client: TestClient, auth_headers: dict[str, str], fake: FakeShopee, db: Session
+) -> None:
+    _connect(client, auth_headers)
+    for payload in (
+        {"code": 3, "shop_id": 12345},
+        {"code": 99, "shop_id": SHOP_ID},
+        {"code": "x", "shop_id": SHOP_ID},
+    ):
+        assert _push(client, payload).status_code == 200
+    assert db.scalars(select(SyncRun)).all() == []
+
+    body = b"not json"
+    sig = hmac.new(
+        PARTNER_KEY.encode(), PUSH_URL.encode() + b"|" + body, hashlib.sha256
+    ).hexdigest()
+    bad = client.post("/api/shopee/push", content=body, headers={"Authorization": sig})
+    assert bad.status_code == 400
+    big = b"x" * (70 * 1024)
+    assert client.post("/api/shopee/push", content=big).status_code == 413
+
+
+def test_push_uses_dedicated_key_when_configured(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    fake: FakeShopee,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _connect(client, auth_headers)
+    monkeypatch.setattr(get_settings(), "shopee_push_key", SecretStr("push-only-key"))
+    assert _push(client, {"code": 3, "shop_id": SHOP_ID}).status_code == 401
+    assert _push(client, {"code": 3, "shop_id": SHOP_ID}, key="push-only-key").status_code == 200
+
+
+def test_running_sync_does_not_absorb_new_requests(
+    client: TestClient, auth_headers: dict[str, str], fake: FakeShopee, db: Session
+) -> None:
+    _connect(client, auth_headers)
+    first = client.post("/api/shopee/sync", headers=auth_headers).json()
+    db.execute(update(SyncRun).values(status="running"))
+    db.commit()
+    second = client.post("/api/shopee/sync", headers=auth_headers).json()
+    assert second["id"] != first["id"] and second["status"] == "queued"

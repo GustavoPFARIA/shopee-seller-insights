@@ -190,7 +190,7 @@ class SyncRunOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    trigger: Literal["manual", "scheduled"]
+    trigger: Literal["manual", "scheduled", "push"]
     status: Literal["queued", "running", "success", "error"]
     started_at: datetime
     finished_at: datetime | None

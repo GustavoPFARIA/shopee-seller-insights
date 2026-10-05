@@ -14,6 +14,8 @@ x-app-env: &app-env
   SHOPEE_API_HOST: ${SHOPEE_API_HOST:-https://partner.test-stable.shopeemobile.com}
   SHOPEE_REDIRECT_URL: ${SHOPEE_REDIRECT_URL:-http://localhost:8080/api/shopee/callback}
   SHOPEE_SYNC_INTERVAL_MINUTES: ${SHOPEE_SYNC_INTERVAL_MINUTES:-30}
+  SHOPEE_PUSH_URL: ${SHOPEE_PUSH_URL:-http://localhost:8080/api/shopee/push}
+  SHOPEE_PUSH_KEY: ${SHOPEE_PUSH_KEY:-}
   TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
   # E-mail (optional): invitations and the weekly digest.
   SMTP_HOST: ${SMTP_HOST:-}
