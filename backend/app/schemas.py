@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -128,3 +128,5 @@ class Alert(BaseModel):
 class AiSummaryResponse(BaseModel):
     enabled: bool
     summary: str | None
+    # Exactly what was sent to the model, shown for transparency.
+    facts: dict[str, Any] | None = None
