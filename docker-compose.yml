@@ -66,7 +66,12 @@ services:
       <<: *app-env
     restart: unless-stopped
     healthcheck:
-      disable: true  # the image's healthcheck probes the HTTP API, not the worker
+      # Healthy while the worker loop keeps refreshing its heartbeat file.
+      test: ["CMD", "python", "-m", "app.worker", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     networks: [backend]
 
   web:

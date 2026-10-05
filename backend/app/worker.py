@@ -10,10 +10,12 @@ others, and a PostgreSQL advisory lock prevents two syncs of the same shop at on
 
 import argparse
 import logging
+import os
 import signal
 import threading
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from types import FrameType
 
 from sqlalchemy import select
@@ -28,6 +30,10 @@ from app.models import ShopeeConnection, SyncRun
 log = logging.getLogger("app.worker")
 
 QUEUE_POLL_SECONDS = 15
+# Touched on every loop iteration; the container healthcheck fails if it gets old,
+# so a hung worker is reported unhealthy (see `python -m app.worker --healthcheck`).
+HEARTBEAT_FILE = Path(os.environ.get("WORKER_HEARTBEAT_FILE", "/tmp/ssi-worker-heartbeat"))  # noqa: S108
+HEARTBEAT_MAX_AGE_SECONDS = 120
 REAUTH_ERROR = "reauthorization_required"
 
 
@@ -121,10 +127,27 @@ def run_cycle() -> dict[str, int]:
     return stats
 
 
+def beat() -> None:
+    HEARTBEAT_FILE.touch()
+
+
+def is_healthy() -> bool:
+    try:
+        age = time.time() - HEARTBEAT_FILE.stat().st_mtime
+    except FileNotFoundError:
+        return False
+    return age < HEARTBEAT_MAX_AGE_SECONDS
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Shopee sync worker")
     parser.add_argument("--once", action="store_true", help="run a single cycle and exit")
+    parser.add_argument(
+        "--healthcheck", action="store_true", help="exit 0 if the running worker is alive"
+    )
     args = parser.parse_args()
+    if args.healthcheck:
+        raise SystemExit(0 if is_healthy() else 1)
     configure_logging()
     settings = get_settings()
     stop = threading.Event()
@@ -138,10 +161,11 @@ def main() -> None:
 
     interval = settings.shopee_sync_interval_minutes * 60
     next_cycle = 0.0
+    if not settings.shopee_enabled:
+        log.info("Shopee integration not configured; worker idle")
     while not stop.is_set():
-        if not settings.shopee_enabled:
-            log.info("Shopee integration not configured; worker idle")
-        else:
+        beat()
+        if settings.shopee_enabled:
             if (ran := process_queue()) > 0:
                 log.info("queued syncs done: %s", ran)
             if time.monotonic() >= next_cycle:
@@ -149,7 +173,7 @@ def main() -> None:
                 next_cycle = time.monotonic() + interval
         if args.once:
             return
-        stop.wait(QUEUE_POLL_SECONDS if settings.shopee_enabled else interval)
+        stop.wait(QUEUE_POLL_SECONDS)
 
 
 if __name__ == "__main__":  # pragma: no cover

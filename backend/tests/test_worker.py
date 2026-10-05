@@ -1,5 +1,6 @@
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -209,3 +210,23 @@ def test_queued_run_for_disconnected_shop_is_closed(
     client.delete("/api/shopee/connection", headers=auth_headers)
     assert worker.process_queue() == 1
     assert db.scalar(select(SyncRun.status)) == "error"
+
+
+def test_heartbeat_healthcheck(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake: FakeShopee
+) -> None:
+    import os
+
+    heartbeat = tmp_path / "beat"
+    monkeypatch.setattr(worker, "HEARTBEAT_FILE", heartbeat)
+    assert worker.is_healthy() is False  # never started
+    monkeypatch.setattr("sys.argv", ["worker", "--once"])
+    worker.main()
+    assert worker.is_healthy() is True
+    old = time.time() - worker.HEARTBEAT_MAX_AGE_SECONDS - 5
+    os.utime(heartbeat, (old, old))
+    assert worker.is_healthy() is False  # hung worker
+    monkeypatch.setattr("sys.argv", ["worker", "--healthcheck"])
+    with pytest.raises(SystemExit) as exc:
+        worker.main()
+    assert exc.value.code == 1
