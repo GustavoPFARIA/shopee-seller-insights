@@ -37,7 +37,7 @@ DIGEST_CHECK_SECONDS = 3600
 # so a hung worker is reported unhealthy (see `python -m app.worker --healthcheck`).
 HEARTBEAT_FILE = Path(os.environ.get("WORKER_HEARTBEAT_FILE", "/tmp/ssi-worker-heartbeat"))  # noqa: S108
 HEARTBEAT_MAX_AGE_SECONDS = 120
-REAUTH_ERROR = "reauthorization_required"
+REAUTH_ERROR = shopee_sync.REAUTH_ERROR
 
 
 def _record_reauth_once(seller_id: int) -> None:

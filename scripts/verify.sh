@@ -67,6 +67,7 @@ stage_static() {
   run "smoke test lint" "$BIN/ruff" check --config "$BACKEND/pyproject.toml" "$ROOT/scripts"
   cd "$FRONTEND"
   run "frontend lint" npm run --silent lint
+  run "frontend unit tests (Vitest)" npm run --silent test
   run "frontend type check + build" npm run --silent build
 }
 
@@ -106,7 +107,7 @@ stage_e2e() {
     "${compose[@]}" logs --tail 80 || true
     FAILED+=("e2e stack start")
   else
-    run "smoke test (43 checks through nginx)" "$PY" scripts/smoke_test.py \
+    run "smoke test (52 checks through nginx)" "$PY" scripts/smoke_test.py \
       --base-url "http://localhost:$E2E_PORT"
     run "worker container is running" bash -c \
       "[[ \$(${compose[*]} ps -q --status running worker | wc -l) -eq 1 ]]"

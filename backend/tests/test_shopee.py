@@ -746,3 +746,18 @@ def test_running_sync_does_not_absorb_new_requests(
     db.commit()
     second = client.post("/api/shopee/sync", headers=auth_headers).json()
     assert second["id"] != first["id"] and second["status"] == "queued"
+
+
+def test_revoked_refresh_token_asks_for_reconnection(
+    client: TestClient, auth_headers: dict[str, str], fake: FakeShopee, db: Session
+) -> None:
+    _connect(client, auth_headers)
+    # The seller revoked access in Shopee: both tokens stop working.
+    fake.expire_all_access_tokens()
+    fake.refresh.clear()
+    run = _sync(client, auth_headers)
+    assert (run["status"], run["error"]) == ("error", "reauthorization_required")
+    db.expire_all()
+    conn = db.scalar(select(ShopeeConnection))
+    # Marked expired so the scheduler records it once instead of retrying every cycle.
+    assert conn is not None and conn.refresh_expires_at <= datetime.now(UTC)

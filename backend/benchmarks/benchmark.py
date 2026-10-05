@@ -44,7 +44,7 @@ from sqlalchemy import insert, select, text  # noqa: E402
 from alembic import command  # noqa: E402
 from app.db import get_engine  # noqa: E402
 from app.main import create_app  # noqa: E402
-from app.models import Order, OrderItem, Product, Seller, User  # noqa: E402
+from app.models import Membership, Order, OrderItem, Product, Seller, User  # noqa: E402
 from app.security import hash_password  # noqa: E402
 from app.services.metrics import _revenue_items  # noqa: E402
 
@@ -173,15 +173,17 @@ def main() -> None:
     for n in range(20):
         load_shop(f"Noise Shop {n}", args.orders // 20, 50, rng)
     with get_engine().begin() as conn:
-        conn.execute(
-            insert(User).values(
+        user_id = conn.execute(
+            insert(User)
+            .values(
                 seller_id=seller_id,
                 email="bench@example.com",
                 password_hash=hash_password("bench-password-1"),
-                role="owner",
                 created_at=datetime.now(UTC),
             )
-        )
+            .returning(User.id)
+        ).scalar_one()
+        conn.execute(insert(Membership).values(user_id=user_id, seller_id=seller_id, role="owner"))
         conn.execute(text("ANALYZE"))
         counts = conn.execute(
             text("SELECT (SELECT count(*) FROM orders), (SELECT count(*) FROM order_items)")

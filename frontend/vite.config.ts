@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 
 // Local development only (npm run dev): /api is proxied to FastAPI on :8000.
@@ -9,4 +9,5 @@ const proxy = { '/api': { target: apiTarget, changeOrigin: false } }
 export default defineConfig({
   plugins: [react()],
   server: { port: 5173, proxy },
+  test: { environment: 'jsdom', setupFiles: ['./src/test/setup.ts'], restoreMocks: true },
 })

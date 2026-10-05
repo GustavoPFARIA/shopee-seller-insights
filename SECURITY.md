@@ -17,9 +17,11 @@ This is a portfolio project, not a hosted service. The main controls are:
   - Refresh tokens in an HttpOnly, SameSite=Strict cookie, rotated on every use, with
     detection of reused tokens.
 - **Authorization**:
-  - Every query is scoped to the authenticated seller.
-  - Owner, manager and viewer roles are checked on every request, using the role
-    stored in the database.
+  - Every query is scoped to the active shop.
+  - A user can belong to several shops. The active shop comes from the `X-Shop-Id`
+    header, and the membership and its role are read from the database on every
+    request; a shop the user is not a member of answers 403.
+  - Owner, manager and viewer roles are checked on every request.
   - Cross-tenant access and role permissions are covered by automated tests.
 - **Input handling**:
   - Limits on upload type, size, row count and decompressed size.
@@ -59,13 +61,19 @@ This is a portfolio project, not a hosted service. The main controls are:
   revokes the whole session.
 - **Fixed IP for nginx.** `FORWARDED_ALLOW_IPS` trusts nginx at a fixed address on the
   compose network. Other topologies must set it to their own reverse proxy's address.
-- **Invitations are not e-mailed.** There is no SMTP; the owner shares the one-time
-  link themselves.
+- **No password reset.** A user who forgets their password needs an owner to remove
+  and re-invite them.
+- **E-mail is optional.** Without SMTP, the owner shares one-time invitation links
+  themselves. E-mail content holds aggregates and product names only, never buyer data.
+- **Push signature format.** The webhook check (`HMAC-SHA256(push key, push URL + "|" +
+  body)`) follows public integration guides; confirm it against your Shopee console
+  before relying on push alone. Scheduled polling keeps working if pushes are rejected.
 - **Not tested against the live Shopee API.** The integration follows the Shopee
   Open Platform v2 documentation and is tested against a fake that checks signatures.
   It has not been run against a live partner account in this repository.
 - **Dev-only fallback secrets.** `docker-compose.yml` has them so the demo runs from a
-  clean clone. The API refuses them when `APP_ENV=production`.
+  clean clone. The API refuses them, and the public demo-mode encryption key, when
+  `APP_ENV=production`.
 
 ## Supported versions
 

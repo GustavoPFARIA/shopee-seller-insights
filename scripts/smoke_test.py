@@ -303,13 +303,60 @@ def run(base_url: str) -> Checks:
         == 403,
     )
 
-    print("\n[7] Optional integrations degrade gracefully")
+    print("\n[7] Multiple shops, shop settings and returns")
+    shops = {s["name"]: s for s in me.get("shops", [])}
+    c.check("demo owner belongs to two shops", len(shops) == 2, str(shops))
+    second = shops.get("Another Shop", {})
+    c.check("demo owner is a manager of Another Shop", second.get("role") == "manager")
+    switched = owner.get("/api/auth/me", headers={"X-Shop-Id": str(second.get("id", 0))}).json()
+    c.check(
+        "X-Shop-Id switches the active shop",
+        switched.get("shop_name") == "Another Shop" and switched.get("role") == "manager",
+        str(switched),
+    )
+    c.check(
+        "the shop's own owner cannot switch into the demo shop (403)",
+        other.get("/api/auth/me", headers={"X-Shop-Id": str(me.get("seller_id"))}).status == 403,
+    )
+    settings = owner.get("/api/settings")
+    c.check("shop settings load", settings.status == 200 and "stalled_days" in settings.json())
+    c.check(
+        "settings are validated (stalled_days=0 -> 422)",
+        owner.request(
+            "PATCH",
+            "/api/settings",
+            body=b'{"stalled_days": 0}',
+            headers={"Content-Type": "application/json"},
+        ).status
+        == 422,
+    )
+    c.check(
+        "viewer cannot change settings (403)",
+        viewer.request(
+            "PATCH",
+            "/api/settings",
+            body=b'{"stalled_days": 10}',
+            headers={"Content-Type": "application/json"},
+        ).status
+        == 403,
+    )
+    product_rows = owner.get("/api/metrics/products").json()
+    c.check(
+        "product metrics include returns",
+        bool(product_rows) and "return_rate_pct" in product_rows[0],
+    )
+
+    print("\n[8] Optional integrations degrade gracefully")
     summary = owner.get("/api/summary/weekly")
     c.check("AI summary works or reports disabled", summary.status == 200, summary.text[:200])
     shopee = owner.get("/api/shopee/status").json()
     c.check("Shopee status endpoint answers", "enabled" in shopee and "connected" in shopee)
+    forged = owner.post_json(
+        "/api/shopee/push", {"code": 3, "shop_id": 1}, auth=False, headers={"Authorization": "x"}
+    )
+    c.check("unsigned Shopee push is rejected (401)", forged.status == 401, str(forged.status))
 
-    print("\n[8] Logout and rate limiting")
+    print("\n[9] Logout and rate limiting")
     out = owner.request("POST", "/api/auth/logout", headers=CSRF)
     c.check("logout -> 204", out.status == 204)
     c.check(

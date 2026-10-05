@@ -143,8 +143,22 @@ def disconnect(db: Session, seller_id: int) -> bool:
 # ---- tokens ------------------------------------------------------------------
 
 
+class ReauthorizationRequiredError(Exception):
+    """Shopee rejected the refresh token (revoked or expired): an owner must reconnect."""
+
+
+REAUTH_ERROR = "reauthorization_required"
+
+
 def _refresh(db: Session, client: ShopeeClient, conn: ShopeeConnection) -> str:
-    tokens = client.refresh_token(decrypt(conn.refresh_token_enc), conn.shop_id)
+    try:
+        tokens = client.refresh_token(decrypt(conn.refresh_token_enc), conn.shop_id)
+    except ShopeeAuthError:
+        # Mark the connection as expired so the scheduler stops retrying every cycle.
+        db.rollback()
+        conn.refresh_expires_at = datetime.now(UTC)
+        db.commit()
+        raise ReauthorizationRequiredError from None
     now = datetime.now(UTC)
     conn.access_token_enc = encrypt(tokens.access_token)
     conn.refresh_token_enc = encrypt(tokens.refresh_token)  # Shopee rotates it too
@@ -218,6 +232,11 @@ def sync_seller(
             _sync_orders(db, client, conn, run)
             run.products_stock_updated = _sync_stock(db, client, conn)
             run.status = "success"
+        except ReauthorizationRequiredError:
+            db.rollback()
+            run.status = "error"
+            run.error = REAUTH_ERROR
+            log.warning("seller %s: Shopee refused the refresh token", seller_id)
         except ShopeeApiError as exc:
             db.rollback()
             run.status = "error"

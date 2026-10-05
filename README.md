@@ -24,8 +24,10 @@ syncs without duplicating orders, and it flags what needs attention.
 
 - **Shopee Open Platform integration (API v2)**:
   - The shop owner authorizes the app with OAuth.
-  - A background worker imports orders every 30 minutes. A manual "Sync now" button
+  - A background worker imports orders on a schedule. A manual "Sync now" button
     does the same on demand.
+  - **Push notifications (webhook)**: when Shopee notifies a new or changed order, a
+    sync of that shop is queued at once. Only signed notifications are accepted.
   - Exact fees come from the escrow statement. Stock is synced by SKU, variations included.
 - **Upload** of CSV or XLSX order exports, with Brazilian Seller Centre headers in
   Portuguese or the English export headers:
@@ -40,12 +42,18 @@ syncs without duplicating orders, and it flags what needs attention.
   - `margin = revenue − commission − service fee − seller shipping − coupons − unit cost × units`.
   - A product with no cost shows "not set" instead of a misleading number.
 - **ABC curve** (Pareto): A up to 80% of cumulative revenue, B up to 95%, C for the rest.
+- **Returns per product**: returned and cancelled units, and the return rate.
 - **Alerts**: low stock, stalled products (no sales in N days while stock is on hand),
-  and margin below a threshold over the last 30 days.
+  margin below a threshold, and a return rate above a threshold. Each shop sets its own
+  thresholds in **Settings**.
 - **Cost and stock spreadsheet**: download the catalogue, fill in cost and stock in
   Excel or Sheets, and upload it back. Empty cells keep the current value.
 - **Teams**: a shop can have several users with **owner / manager / viewer** roles,
-  invited through one-time links.
+  invited through one-time links (e-mailed when SMTP is configured).
+- **Several shops per account**: one login can manage several shops (for example one per
+  country or brand), with a different role in each. A shop switcher sits in the sidebar.
+- **Weekly e-mail summary** (optional, needs SMTP): owners and managers get last week's
+  numbers and alerts every Monday. A preview can be sent from Settings.
 - **CSV export** of product metrics, protected against spreadsheet formula injection.
 - **Optional AI weekly summary** with Claude (`claude-haiku-4-5`). It is enabled only
   when `ANTHROPIC_API_KEY` is set, and the model gets **aggregates only**.
@@ -61,13 +69,17 @@ syncs without duplicating orders, and it flags what needs attention.
 |---|---|
 | ![Dashboard](docs/screenshots/dashboard.png) | ![Products](docs/screenshots/products.png) |
 
-| Shopee integration | Team and invitations |
+| Integrations (Shopee sync and push) | Team and invitations |
 |---|---|
-| ![Shopee](docs/screenshots/shopee.png) | ![Team](docs/screenshots/team.png) |
+| ![Integrations](docs/screenshots/integrations.png) | ![Team](docs/screenshots/team.png) |
 
-| Upload | Mobile, dark mode |
+| Upload | Settings |
 |---|---|
-| ![Upload](docs/screenshots/upload.png) | ![Mobile](docs/screenshots/dashboard-mobile-dark.png) |
+| ![Upload](docs/screenshots/upload.png) | ![Settings](docs/screenshots/settings.png) |
+
+| Editing a product | Mobile, dark mode |
+|---|---|
+| ![Edit product](docs/screenshots/product-edit.png) | ![Mobile](docs/screenshots/dashboard-mobile-dark.png) |
 
 ## Architecture
 
@@ -265,8 +277,31 @@ states, stored hashed. `rate_limit_hits` holds the rate-limit counters, keyed by
    - Queued runs are claimed with `FOR UPDATE SKIP LOCKED`, and a PostgreSQL advisory
      lock prevents two syncs of the same shop at once.
    - Expired access tokens are refreshed automatically. When the 30-day refresh token
-     expires, the run is recorded as `reauthorization_required`.
-   - Every run is listed on the Shopee tab.
+     expires or Shopee rejects it (the seller revoked access), the run is recorded as
+     `reauthorization_required` and owners see a **Reconnect** button.
+   - Every run is listed on the Integrations page.
+6. **Push notifications.** Register `https://<your-host>/api/shopee/push` as the push
+   URL on the Shopee console and set `SHOPEE_PUSH_URL` and `SHOPEE_PUSH_KEY`.
+   - The signature is `HMAC-SHA256(push key, push URL + "|" + raw body)` in the
+     `Authorization` header, compared in constant time. Unsigned requests get 401.
+   - The body is never trusted for data: an order event only queues a sync of that
+     shop, which reads everything through the signed API.
+
+### Try it without a Shopee account (demo mode)
+
+`docker-compose.shopee-demo.yml` adds a **fake Shopee** server
+([`devtools/fake_shopee_server.py`](backend/devtools/fake_shopee_server.py)) with a
+consent page, seeded orders and a button that creates a new order and sends a signed
+push notification:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.shopee-demo.yml up --build
+```
+
+Go to **Integrations → Connect Shopee shop**, approve on the fake consent page, then
+open http://localhost:9555 and click *Create a new order*: the order appears after the
+push-triggered sync. The demo uses a public, demo-only encryption key that production
+refuses to start with.
 
 Without these credentials the integration stays off, the worker sits idle and manual
 uploads keep working.
@@ -313,6 +348,8 @@ Open **http://localhost:8080** and sign in:
 | `viewer@shopee-insights.dev` | `DemoPassword123!` | viewer (read-only) |
 | `other@shopee-insights.dev` | `DemoPassword123!` | owner of a different shop (isolation check) |
 
+The demo owner is also a **manager of that other shop**, to show the shop switcher.
+
 On first start the API applies the migrations and loads ~120 days of fake orders.
 Swagger UI is at http://localhost:8080/api/docs. To try an upload, use
 [`docs/sample-orders.csv`](docs/sample-orders.csv), which is fake data in the Seller
@@ -353,6 +390,11 @@ startup. Invalid values stop the API with a clear error.
 | `SHOPEE_API_HOST` | Shopee test environment | Production: `https://partner.shopeemobile.com`. |
 | `SHOPEE_REDIRECT_URL` | `http://localhost:8080/api/shopee/callback` | Must match the URL registered on the Shopee console. |
 | `SHOPEE_SYNC_INTERVAL_MINUTES` / `SHOPEE_BACKFILL_DAYS` | `30` / `90` | Scheduled sync interval and first-sync history. |
+| `SHOPEE_AUTH_HOST` | same as `SHOPEE_API_HOST` | Host of the browser authorization page (only the demo mode changes it). |
+| `SHOPEE_PUSH_URL` / `SHOPEE_PUSH_KEY` | empty | Enable push notifications. The URL must match the one registered on Shopee exactly. |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` | empty / `587` | Enable e-mail (invitations and the weekly summary). |
+| `SMTP_SECURITY` | `starttls` | `starttls`, `ssl` or `none` (`none` is refused in production). |
+| `APP_BASE_URL` | `http://localhost:8080` | Public address used in e-mailed links. |
 | `WEB_PORT` | `8080` | Host port of the web app (compose only). |
 
 ### Local development without Docker
@@ -382,7 +424,7 @@ scripts/verify.sh            # everything (about 5 minutes)
 scripts/verify.sh static     # lint, format, strict typing, frontend lint + build
 scripts/verify.sh test       # backend tests on a real PostgreSQL
 scripts/verify.sh security   # pip-audit, npm audit, gitleaks, no committed secrets
-scripts/verify.sh e2e        # fresh docker compose stack + 43-check smoke test
+scripts/verify.sh e2e        # fresh docker compose stack + 52-check smoke test
 scripts/verify.sh perf       # benchmark on a large synthetic dataset
 ```
 
@@ -394,8 +436,8 @@ deletes its volumes at the end, so it never touches your demo data.
 
 | Stage | Checks |
 |---|---|
-| `static` | `ruff` lint and format, `mypy --strict` on app, tests and benchmarks, frontend lint, TypeScript type check and production build. |
-| `test` | 170 backend tests with ≥ 85% coverage (currently ~98%), on a real PostgreSQL 16 with the real migrations. Also checks that the migrations match the models (`alembic check`) and that every migration can be rolled back and applied again. |
+| `static` | `ruff` lint and format, `mypy --strict` on app, tests and benchmarks, frontend lint, 16 frontend unit tests (Vitest + Testing Library), TypeScript type check and production build. |
+| `test` | 216 backend tests with ≥ 85% coverage (currently ~99%), on a real PostgreSQL 16 with the real migrations. Also checks that the migrations match the models (`alembic check`) and that every migration can be rolled back and applied again. |
 | `security` | Known-vulnerability audit of Python and npm dependencies; a gitleaks secret scan of the full git history; no `.env`, key or certificate files tracked by git. |
 | `e2e` | Builds the images and starts the stack from scratch, then runs [`scripts/smoke_test.py`](scripts/smoke_test.py) through nginx, the way a user (and an attacker) would. It also checks that the worker is running and that no token or password appears in the logs. |
 | `perf` | Loads a large synthetic dataset, measures p50/p95 latency of every read endpoint and the time of a maximum-size upload, prints the PostgreSQL query plan, and fails if a p95 exceeds the budget. |
@@ -415,11 +457,11 @@ The backend tests cover:
 - no Shopee token ever written to the logs
 
 The Shopee tests run against a **fake Shopee Open Platform**
-([`tests/fake_shopee.py`](backend/tests/fake_shopee.py)). Like the real API, it checks
+([`devtools/fake_shopee.py`](backend/devtools/fake_shopee.py)). Like the real API, it checks
 every HMAC signature and timestamp, enforces the 15-day window, paginates and can inject
 failures such as 429s and expired tokens.
 
-The smoke test groups its 43 checks into eight areas:
+The smoke test groups its 52 checks into nine areas:
 
 1. **HTTP security headers:** CSP, `nosniff`, `Referrer-Policy`, and the nginx version
    hidden.
@@ -434,9 +476,12 @@ The smoke test groups its 43 checks into eight areas:
    - formula injection, a disguised binary and a file over 5 MB are all rejected.
 6. **Isolation:** another shop can neither see nor edit the demo shop's data, and a
    viewer cannot upload or invite.
-7. **Optional integrations:** the AI summary and Shopee endpoints answer even without
-   credentials.
-8. **Brute force:** login is rate limited even when `X-Forwarded-For` is spoofed.
+7. **Shops and settings:** the shop switcher (`X-Shop-Id`) works for members and answers
+   403 for everyone else; settings are validated and read-only for viewers; product
+   metrics include returns.
+8. **Optional integrations:** the AI summary and Shopee endpoints answer even without
+   credentials, and an unsigned push notification is rejected.
+9. **Brute force:** login is rate limited even when `X-Forwarded-For` is spoofed.
 
 ### Performance
 
@@ -474,20 +519,25 @@ are slower and noisier.
 
 Done:
 
-- Shopee Open Platform integration: OAuth, order, escrow and stock sync, scheduled worker
+- Shopee Open Platform integration: OAuth, order, escrow and stock sync, scheduled
+  worker, push notifications, and a fake-Shopee demo mode
 - Spreadsheet import of product cost and stock
+- Returns per product and a high-return alert
+- Per-shop alert thresholds
+- Several shops per account, multi-user shops with roles
+- E-mailed invitations and weekly summary
 - Rotating refresh tokens in an HttpOnly cookie
 - PostgreSQL rate limiter shared by all replicas
 - nginx serving the static frontend
-- Multi-user shops with roles
+- Frontend unit and component tests
 
 Next:
 
-1. Shopee push notifications (webhooks) for near real-time order updates, in addition to polling.
-2. Returns and refunds detail from the escrow statement, to compute net margin per return.
-3. E-mail delivery of invitations and of the weekly summary (needs an SMTP provider).
-4. Frontend component tests (Vitest + Testing Library).
-5. Several shops per account (for example, one per country).
+1. Password reset by e-mail.
+2. Refund amounts per return from the escrow statement (today returns are counted in
+   units, not in money).
+3. Validation of the integration against a live Shopee shop (it is built and tested
+   against the documented API and a faithful fake, see SECURITY.md).
 
 ## License
 

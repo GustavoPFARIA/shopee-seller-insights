@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { api, ApiError, type Invitation, type Me, type Member, type Role } from '../api'
+import { api, ApiError, type Invitation, type Member, type Role } from '../api'
+import { useToast } from '../components/Toast'
+import { fmtDate, fmtDateTime } from '../format'
+import { useSession } from '../session'
 
 const ROLES: Role[] = ['owner', 'manager', 'viewer']
 const ROLE_HELP: Record<Role, string> = {
-  owner: 'everything, including the team',
-  manager: 'upload reports, edit products, AI summary, Shopee sync',
+  owner: 'everything, including the team, settings and the Shopee connection',
+  manager: 'upload reports, edit products, sync Shopee, AI summary',
   viewer: 'read-only dashboards',
 }
 
-export default function TeamPage({ me }: { me: Me }) {
-  const isOwner = me.role === 'owner'
+export default function TeamPage() {
+  const { me, isOwner } = useSession()
+  const notify = useToast()
   const [members, setMembers] = useState<Member[]>([])
   const [invitations, setInvitations] = useState<Invitation[]>([])
   const [email, setEmail] = useState('')
@@ -22,14 +26,13 @@ export default function TeamPage({ me }: { me: Me }) {
     if (isOwner) api.invitations().then(setInvitations).catch(() => undefined)
   }, [isOwner])
 
-  useEffect(() => {
-    load()
-  }, [load])
+  useEffect(load, [load])
 
-  const run = async (action: () => Promise<unknown>) => {
+  const run = async (action: () => Promise<unknown>, done?: string) => {
     setError(null)
     try {
       await action()
+      if (done) notify(done)
       load()
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Request failed')
@@ -38,19 +41,30 @@ export default function TeamPage({ me }: { me: Me }) {
 
   async function invite(e: FormEvent) {
     e.preventDefault()
+    setLink(null)
     await run(async () => {
       const inv = await api.invite(email, role)
-      // Fragment, not query string: never sent to the server or logged.
-      setLink(`${window.location.origin}/#invite=${inv.token}`)
+      if (inv.emailed) {
+        notify(`Invitation e-mailed to ${inv.email}`)
+      } else {
+        // Fragment, not query string: never sent to the server or logged.
+        setLink(`${window.location.origin}/#invite=${inv.token}`)
+      }
       setEmail('')
     })
   }
 
   return (
     <>
-      <div className="card">
-        <h2>Team</h2>
-        {error && <p className="error">{error}</p>}
+      <div className="page-head">
+        <div>
+          <h2>Team</h2>
+          <p className="muted">People with access to {me.shop_name}.</p>
+        </div>
+      </div>
+      {error && <p className="error-box">{error}</p>}
+
+      <section className="card">
         <div className="table-wrap">
           <table>
             <thead>
@@ -58,7 +72,7 @@ export default function TeamPage({ me }: { me: Me }) {
                 <th>E-mail</th>
                 <th>Role</th>
                 <th>Since</th>
-                {isOwner && <th />}
+                {isOwner && <th aria-label="Actions" />}
               </tr>
             </thead>
             <tbody>
@@ -69,21 +83,30 @@ export default function TeamPage({ me }: { me: Me }) {
                   </td>
                   <td>
                     {isOwner ? (
-                      <select value={m.role} onChange={(e) => run(() => api.setRole(m.id, e.target.value as Role))}>
+                      <select
+                        aria-label={`Role of ${m.email}`}
+                        value={m.role}
+                        onChange={(e) => run(() => api.setRole(m.id, e.target.value as Role), 'Role updated')}
+                      >
                         {ROLES.map((r) => (
-                          <option key={r} value={r}>{r}</option>
+                          <option key={r} value={r}>
+                            {r}
+                          </option>
                         ))}
                       </select>
                     ) : (
-                      m.role
+                      <span className="tag">{m.role}</span>
                     )}
                   </td>
-                  <td>{new Date(m.created_at).toLocaleDateString()}</td>
+                  <td>{fmtDate(m.created_at)}</td>
                   {isOwner && (
                     <td>
                       <button
-                        className="secondary"
-                        onClick={() => window.confirm(`Remove ${m.email}?`) && run(() => api.removeMember(m.id))}
+                        className="secondary small-button"
+                        onClick={() =>
+                          window.confirm(`Remove ${m.email} from this shop?`) &&
+                          run(() => api.removeMember(m.id), 'Member removed')
+                        }
                       >
                         Remove
                       </button>
@@ -94,51 +117,65 @@ export default function TeamPage({ me }: { me: Me }) {
             </tbody>
           </table>
         </div>
-        <ul className="muted">
+        <ul className="list muted small">
           {ROLES.map((r) => (
             <li key={r}>
               <strong>{r}</strong>: {ROLE_HELP[r]}
             </li>
           ))}
         </ul>
-      </div>
+      </section>
 
       {isOwner && (
-        <div className="card">
-          <h2>Invite someone</h2>
-          <form className="filters" onSubmit={invite}>
-            <label>
-              E-mail
-              <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
-            </label>
-            <label>
-              Role
-              <select value={role} onChange={(e) => setRole(e.target.value as Role)}>
-                {ROLES.map((r) => (
-                  <option key={r} value={r}>{r}</option>
-                ))}
-              </select>
-            </label>
-            <button className="primary">Create invite link</button>
+        <section className="card">
+          <h3>Invite someone</h3>
+          <form className="toolbar" onSubmit={invite}>
+            <input
+              type="email"
+              required
+              aria-label="E-mail to invite"
+              placeholder="name@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+            <select aria-label="Role" value={role} onChange={(e) => setRole(e.target.value as Role)}>
+              {ROLES.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+            <button className="primary">Invite</button>
           </form>
           {link && (
-            <p>
-              Send this one-time link (valid for 72 hours, shown only once):{' '}
+            <div className="ok-box">
+              <p>
+                E-mail is not configured, so send this one-time link yourself (valid for 72 hours,
+                shown only once):
+              </p>
               <code className="invite-link">{link}</code>{' '}
-              <button className="secondary" onClick={() => navigator.clipboard.writeText(link)}>Copy</button>
-            </p>
+              <button
+                className="secondary small-button"
+                onClick={() => navigator.clipboard.writeText(link).then(() => notify('Link copied'))}
+              >
+                Copy
+              </button>
+            </div>
           )}
           {invitations.length > 0 && (
             <>
-              <h2>Pending invitations</h2>
-              <ul className="alerts invites">
+              <h4>Pending invitations</h4>
+              <ul className="list">
                 {invitations.map((i) => (
                   <li key={i.id}>
-                    <span>
+                    <span className="grow">
                       {i.email} as <strong>{i.role}</strong>{' '}
-                      <span className="muted">expires {new Date(i.expires_at).toLocaleString()}</span>
+                      <span className="muted small">expires {fmtDateTime(i.expires_at)}</span>
                     </span>
-                    <button className="secondary" onClick={() => run(() => api.revokeInvitation(i.id))}>
+                    <button
+                      className="secondary small-button"
+                      onClick={() => run(() => api.revokeInvitation(i.id), 'Invitation revoked')}
+                    >
                       Revoke
                     </button>
                   </li>
@@ -146,7 +183,7 @@ export default function TeamPage({ me }: { me: Me }) {
               </ul>
             </>
           )}
-        </div>
+        </section>
       )}
     </>
   )
