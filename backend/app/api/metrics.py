@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 
 from app.config import get_settings
+from app.csv_safety import safe_cell
 from app.deps import CurrentUser, DbSession
 from app.schemas import AbcItem, DailyPoint, OverviewResponse, ProductMetrics
 from app.services import metrics
@@ -17,7 +18,6 @@ from app.services import metrics
 router = APIRouter(prefix="/api/metrics", tags=["metrics"])
 
 MAX_PERIOD_DAYS = 366
-FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
 
 def today_local() -> date:
@@ -64,12 +64,6 @@ def get_abc(user: CurrentUser, db: DbSession, period: PeriodDep) -> list[AbcItem
     return metrics.abc_curve(db, user.seller_id, period.start, period.end)
 
 
-def _safe_cell(value: object) -> str:
-    """Neutralize spreadsheet formula injection (OWASP CSV injection)."""
-    text = "" if value is None else str(value)
-    return "'" + text if text.startswith(FORMULA_PREFIXES) else text
-
-
 @router.get("/products/export.csv", response_class=Response)
 def export_products(user: CurrentUser, db: DbSession, period: PeriodDep) -> Response:
     rows = metrics.product_metrics(db, user.seller_id, period.start, period.end)
@@ -82,8 +76,8 @@ def export_products(user: CurrentUser, db: DbSession, period: PeriodDep) -> Resp
         fees = r.commission_fee + r.service_fee + r.shipping_fee + r.voucher
         writer.writerow(
             [
-                _safe_cell(r.sku),
-                _safe_cell(r.name),
+                safe_cell(r.sku),
+                safe_cell(r.name),
                 r.units,
                 r.revenue,
                 fees,

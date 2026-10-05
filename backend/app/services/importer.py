@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from app.csv_safety import is_formula
 from app.models import Order, OrderItem, Product, Upload
 from app.security import pseudonymize
 
@@ -28,7 +29,6 @@ CENT = Decimal("0.01")
 SHOPEE_BR_TZ = timezone(timedelta(hours=-3))
 MAX_XLSX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
 MAX_REPORTED_ERRORS = 20
-FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
 # Canonical field -> accepted headers (Portuguese Seller Centre BR and English export).
 COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
@@ -135,7 +135,7 @@ def _parse_datetime(value: object) -> datetime:
 
 
 def _no_formula(value: str) -> str:
-    if value.startswith(FORMULA_PREFIXES):
+    if is_formula(value):
         raise ValueError("value must not start with a formula character (= + - @)")
     return value
 
@@ -170,7 +170,15 @@ class OrderRow(BaseModel):
     )
 
 
-def _read_dataframe(content: bytes, filename: str, max_rows: int) -> pd.DataFrame:
+def _detect_delimiter(text: str) -> str:
+    """Comma by default; also accept the ';' and tab exports common in Brazil."""
+    try:
+        return csv.Sniffer().sniff(text[:4096], delimiters=",;\t").delimiter
+    except csv.Error:
+        return ","
+
+
+def read_spreadsheet(content: bytes, filename: str, max_rows: int) -> pd.DataFrame:
     if not content:
         raise ImportValidationError("The file is empty")
     lower = filename.lower()
@@ -186,8 +194,7 @@ def _read_dataframe(content: bytes, filename: str, max_rows: int) -> pd.DataFram
                 io.StringIO(text),
                 dtype=str,
                 keep_default_na=False,
-                sep=None,
-                engine="python",
+                sep=_detect_delimiter(text),
                 nrows=max_rows + 1,
             )
         except (pd.errors.ParserError, pd.errors.EmptyDataError, csv.Error) as exc:
@@ -216,7 +223,7 @@ def _read_dataframe(content: bytes, filename: str, max_rows: int) -> pd.DataFram
 
 def parse_file(content: bytes, filename: str, max_rows: int) -> list[OrderRow]:
     """Validate an export file and return clean rows, or raise ImportValidationError."""
-    df = _read_dataframe(content, filename, max_rows)
+    df = read_spreadsheet(content, filename, max_rows)
     if len(df) > max_rows:
         raise ImportValidationError(f"The file exceeds the row limit of {max_rows}")
 

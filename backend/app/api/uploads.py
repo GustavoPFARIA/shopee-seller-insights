@@ -19,6 +19,18 @@ upload_limit = rate_limit(
 )
 
 
+async def read_limited(file: UploadFile) -> bytes:
+    """Read an upload, refusing anything above MAX_UPLOAD_MB without buffering it all."""
+    max_mb = get_settings().max_upload_mb
+    max_bytes = max_mb * 1024 * 1024
+    content = await file.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        raise HTTPException(
+            status.HTTP_413_CONTENT_TOO_LARGE, f"File exceeds the {max_mb} MB limit"
+        )
+    return content
+
+
 @router.post(
     "",
     response_model=UploadResult,
@@ -30,13 +42,7 @@ async def upload_orders(
     file: UploadFile, user: CurrentUser, db: DbSession
 ) -> UploadResult | JSONResponse:
     settings = get_settings()
-    max_bytes = settings.max_upload_mb * 1024 * 1024
-    content = await file.read(max_bytes + 1)
-    if len(content) > max_bytes:
-        raise HTTPException(
-            status.HTTP_413_CONTENT_TOO_LARGE,
-            f"File exceeds the {settings.max_upload_mb} MB limit",
-        )
+    content = await read_limited(file)
     filename = file.filename or "upload"
     try:
         rows = parse_file(content, filename, settings.max_upload_rows)

@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { api, ApiError, type UploadResult } from '../api'
+import ErrorDetails from '../components/ErrorDetails'
 
 export default function UploadPage() {
   const [file, setFile] = useState<File | null>(null)
@@ -43,20 +44,7 @@ export default function UploadPage() {
           {result.products_created} new products.
         </p>
       )}
-      {error && (
-        <div className="error">
-          <p>{error.message}</p>
-          {error.details.length > 0 && (
-            <ul>
-              {error.details.map((d, i) => (
-                <li key={i}>
-                  Row {d.row}, column “{d.field}”: {d.message}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
+      {error && <ErrorDetails error={error} />}
     </div>
   )
 }

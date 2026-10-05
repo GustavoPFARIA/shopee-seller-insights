@@ -174,3 +174,13 @@ def test_brazilian_day_first_dates() -> None:
     bad = ROW.replace("2025-09-01 10:30", "31/31/2025")
     with pytest.raises(ImportValidationError):
         parse_file(_csv(bad), "x.csv", max_rows=10)
+
+
+def test_semicolon_delimited_export() -> None:
+    semi = _csv(ROW).decode().replace('"29,90"', "29,90").replace('"8,37"', "8,37")
+    semi = semi.replace('"1,20"', "1,20").replace('"0,00"', "0,00").replace('"2,00"', "2,00")
+    semi = semi.replace('"Rua A, 1"', "Rua A 1").replace(",", ";").replace("29;90", "29,90")
+    for a, b in (("8;37", "8,37"), ("1;20", "1,20"), ("0;00", "0,00"), ("2;00", "2,00")):
+        semi = semi.replace(a, b)
+    rows = parse_file(semi.encode(), "x.csv", max_rows=10)
+    assert rows[0].unit_price == Decimal("29.90")

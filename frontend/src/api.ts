@@ -76,6 +76,12 @@ export interface UploadResult {
   orders_unchanged: number
   products_created: number
 }
+export interface CatalogImportResult {
+  rows: number
+  updated: number
+  created: number
+  unchanged: number
+}
 export interface Me {
   email: string
   seller_id: number
@@ -88,7 +94,7 @@ export interface AiSummary {
 
 export class ApiError extends Error {
   status: number
-  details: { row: number; field: string; message: string }[]
+  details: { row: number | null; field: string; message: string }[]
   constructor(status: number, message: string, details: ApiError['details'] = []) {
     super(message)
     this.status = status
@@ -146,6 +152,17 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return resp.json() as Promise<T>
 }
 
+async function download(path: string, filename: string): Promise<void> {
+  const resp = await authedFetch(path)
+  if (!resp.ok) throw new ApiError(resp.status, 'Download failed')
+  const url = URL.createObjectURL(await resp.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 const qs = (params: Record<string, string>) => new URLSearchParams(params).toString()
 
 export const api = {
@@ -178,15 +195,13 @@ export const api = {
     return request<UploadResult>('/api/uploads', { method: 'POST', body: form })
   },
   summary: () => request<AiSummary>('/api/summary/weekly'),
-  async exportCsv(p: Record<string, string>) {
-    const resp = await authedFetch(`/api/metrics/products/export.csv?${qs(p)}`)
-    if (!resp.ok) throw new ApiError(resp.status, 'Export failed')
-    const url = URL.createObjectURL(await resp.blob())
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `product-metrics-${p.start}-${p.end}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+  exportCsv: (p: Record<string, string>) =>
+    download(`/api/metrics/products/export.csv?${qs(p)}`, `product-metrics-${p.start}-${p.end}.csv`),
+  downloadCatalog: () => download('/api/products/template.csv', 'products.csv'),
+  importCatalog: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request<CatalogImportResult>('/api/products/import', { method: 'POST', body: form })
   },
 }
 

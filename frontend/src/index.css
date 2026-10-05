@@ -82,3 +82,4 @@ ul.alerts li { padding: 8px 0; border-bottom: 1px solid var(--border); display: 
 .login { max-width: 360px; margin: 10vh auto; }
 .login form { display: flex; flex-direction: column; gap: 10px; }
 .summary { white-space: pre-wrap; line-height: 1.5; }
+.file-button { display: inline-block; cursor: pointer; background: var(--surface); border: 1px solid var(--border); padding: 6px 12px; border-radius: 6px; }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError, type Product } from '../api'
+import ErrorDetails from '../components/ErrorDetails'
 
 function ProductRow({ product, onSaved }: { product: Product; onSaved: (p: Product) => void }) {
   const [cost, setCost] = useState(product.unit_cost ?? '')
@@ -38,10 +39,38 @@ function ProductRow({ product, onSaved }: { product: Product; onSaved: (p: Produ
 export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [importError, setImportError] = useState<ApiError | null>(null)
+  const [importMsg, setImportMsg] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  // Remount rows after a bulk import so their inputs show the new values.
+  const [version, setVersion] = useState(0)
+
+  const load = () =>
+    api
+      .catalog()
+      .then(setProducts)
+      .catch(() => setError('Could not load products'))
 
   useEffect(() => {
-    api.catalog().then(setProducts).catch(() => setError('Could not load products'))
+    load()
   }, [])
+
+  async function onImport(file: File | undefined) {
+    if (!file) return
+    setBusy(true)
+    setImportError(null)
+    setImportMsg(null)
+    try {
+      const r = await api.importCatalog(file)
+      setImportMsg(`${r.updated} updated, ${r.created} created, ${r.unchanged} unchanged.`)
+      await load()
+      setVersion((v) => v + 1)
+    } catch (e) {
+      setImportError(e instanceof ApiError ? e : new ApiError(0, 'Import failed'))
+    } finally {
+      setBusy(false)
+    }
+  }
 
   return (
     <div className="card">
@@ -50,6 +79,27 @@ export default function ProductsPage() {
         Shopee reports do not include your product cost or stock. Fill them in to unlock real
         margin and stock alerts.
       </p>
+      <div className="filters">
+        <button className="secondary" onClick={() => api.downloadCatalog()}>
+          Download spreadsheet
+        </button>
+        <label className="secondary file-button">
+          {busy ? 'Importing…' : 'Import spreadsheet'}
+          <input
+            type="file"
+            accept=".csv,.xlsx"
+            hidden
+            disabled={busy}
+            onChange={(e) => {
+              onImport(e.target.files?.[0])
+              e.target.value = ''
+            }}
+          />
+        </label>
+        <span className="muted">Download, fill in cost and stock, upload. Empty cells are left unchanged.</span>
+      </div>
+      {importMsg && <p>{importMsg}</p>}
+      {importError && <ErrorDetails error={importError} />}
       {error && <p className="error">{error}</p>}
       <div className="table-wrap">
         <table>
@@ -65,7 +115,7 @@ export default function ProductsPage() {
           <tbody>
             {products.map((p) => (
               <ProductRow
-                key={p.id}
+                key={`${p.id}-${version}`}
                 product={p}
                 onSaved={(saved) => setProducts((all) => all.map((x) => (x.id === saved.id ? saved : x)))}
               />

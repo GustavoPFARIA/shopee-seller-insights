@@ -130,3 +130,10 @@ class AiSummaryResponse(BaseModel):
     summary: str | None
     # Exactly what was sent to the model, shown for transparency.
     facts: dict[str, Any] | None = None
+
+
+class CatalogImportResultOut(BaseModel):
+    rows: int
+    updated: int
+    created: int
+    unchanged: int
