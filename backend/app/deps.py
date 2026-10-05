@@ -7,9 +7,9 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
+from app import ratelimit
 from app.db import get_db
 from app.models import User
-from app.ratelimit import limiter
 from app.security import decode_access_token
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
@@ -43,7 +43,7 @@ def rate_limit(
 
     def dependency(request: Request) -> None:
         client = request.client.host if request.client else "unknown"
-        if not limiter.allow(f"{scope}:{client}", limit(), window()):
+        if not ratelimit.allow(f"{scope}:{client}", limit(), window()):
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Too many requests, try again later",

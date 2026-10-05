@@ -14,6 +14,7 @@ from sqlalchemy import (
     Index,
     Integer,
     Numeric,
+    PrimaryKeyConstraint,
     String,
     UniqueConstraint,
 )
@@ -150,3 +151,18 @@ class OrderItem(Base):
 
     order: Mapped[Order] = relationship(back_populates="items")
     product: Mapped[Product] = relationship()
+
+
+class RateLimitHit(Base):
+    """Shared fixed-window counter (key is an HMAC, never a raw IP)."""
+
+    __tablename__ = "rate_limit_hits"
+    __table_args__ = (
+        PrimaryKeyConstraint("key", "window_start", name="pk_rate_limit_hits"),
+        CheckConstraint("hits > 0", name="ck_rate_limit_hits_positive"),
+        Index("ix_rate_limit_hits_window_start", "window_start"),
+    )
+
+    key: Mapped[str] = mapped_column(String(64))
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    hits: Mapped[int] = mapped_column(Integer)

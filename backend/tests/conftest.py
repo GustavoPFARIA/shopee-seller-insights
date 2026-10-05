@@ -26,7 +26,6 @@ from sqlalchemy.orm import Session  # noqa: E402
 from alembic import command  # noqa: E402
 from app.db import get_engine, get_sessionmaker  # noqa: E402
 from app.main import create_app  # noqa: E402
-from app.ratelimit import limiter  # noqa: E402
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -46,11 +45,11 @@ def _clean_tables() -> Iterator[None]:
     with get_engine().begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE order_items, orders, uploads, products, users, sellers "
+                "TRUNCATE order_items, orders, uploads, products, users, sellers, "
+                "rate_limit_hits "
                 "RESTART IDENTITY CASCADE"
             )
         )
-    limiter.reset()
 
 
 @pytest.fixture
