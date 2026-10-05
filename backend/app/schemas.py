@@ -31,7 +31,7 @@ class ProductOut(BaseModel):
     sku: str
     name: str
     unit_cost: Decimal | None
-    stock_quantity: int
+    stock_quantity: int | None
     low_stock_threshold: int
 
 

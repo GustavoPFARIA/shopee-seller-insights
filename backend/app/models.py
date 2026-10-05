@@ -64,7 +64,8 @@ class Product(Base):
     name: Mapped[str] = mapped_column(String(255))
     # NULL means "cost not informed yet": margin cannot be computed.
     unit_cost: Mapped[Decimal | None] = mapped_column(Money)
-    stock_quantity: Mapped[int] = mapped_column(Integer, default=0)
+    # NULL means "stock not tracked": no low-stock alert is raised.
+    stock_quantity: Mapped[int | None] = mapped_column(Integer)
     low_stock_threshold: Mapped[int] = mapped_column(Integer, default=5)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

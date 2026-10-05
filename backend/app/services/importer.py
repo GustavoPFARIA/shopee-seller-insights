@@ -367,7 +367,7 @@ def _ensure_products(db: Session, seller_id: int, rows: list[OrderRow]) -> int:
                     "sku": sku,
                     "name": name,
                     "unit_cost": None,
-                    "stock_quantity": 0,
+                    "stock_quantity": None,
                     "low_stock_threshold": 5,
                     "created_at": datetime.now(UTC),
                 }

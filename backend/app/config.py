@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     # Secret used to pseudonymize buyer identifiers (HMAC) on import.
     pii_hash_secret: SecretStr = Field(min_length=32)
 
+    # IANA zone used to group sales by calendar day (resolved by PostgreSQL).
+    report_timezone: str = Field(
+        default="America/Sao_Paulo", pattern=r"^[A-Za-z_]+(/[A-Za-z_+-]+)*$"
+    )
+
     cors_origins: list[str] = Field(default=["http://localhost:5173"])
 
     max_upload_mb: int = Field(default=5, ge=1, le=50)
