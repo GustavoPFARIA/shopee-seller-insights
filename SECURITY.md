@@ -27,7 +27,10 @@ This is a portfolio project, not a hosted service. The main controls are:
 ## Known limitations
 
 - The rate limiter is in-memory, per process. Use a shared store before running
-  several API replicas.
+  several API replicas. Forwarded headers are deliberately **not** trusted, because a
+  spoofed `X-Forwarded-For` would bypass the limit. Behind the `web` proxy the limit
+  therefore applies to all clients of that proxy together. A production deployment
+  would trust only the known reverse proxy's IP.
 - There are no refresh tokens. The access token is kept in `sessionStorage`, so an
   XSS bug could steal it. React escapes output by default and no HTML is rendered from
   user data, but an HttpOnly cookie session would be stronger.
