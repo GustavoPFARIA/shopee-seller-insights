@@ -263,7 +263,9 @@ class SyncRun(Base):
 
     __tablename__ = "sync_runs"
     __table_args__ = (
-        CheckConstraint("status IN ('running', 'success', 'error')", name="ck_sync_runs_status"),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'success', 'error')", name="ck_sync_runs_status"
+        ),
         CheckConstraint("trigger IN ('manual', 'scheduled')", name="ck_sync_runs_trigger"),
         Index("ix_sync_runs_seller_started", "seller_id", "started_at"),
     )
@@ -271,7 +273,7 @@ class SyncRun(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     seller_id: Mapped[int] = mapped_column(ForeignKey("sellers.id", ondelete="CASCADE"))
     trigger: Mapped[str] = mapped_column(String(16))
-    status: Mapped[str] = mapped_column(String(16), default="running")
+    status: Mapped[str] = mapped_column(String(16), default="queued")
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     orders_created: Mapped[int] = mapped_column(Integer, default=0)

@@ -51,21 +51,6 @@ def test_refresh_rotates_and_returns_new_access_token(client: TestClient) -> Non
     assert me.status_code == 200
 
 
-def test_reuse_of_rotated_token_revokes_family(client: TestClient) -> None:
-    register(client, "s@example.com")
-    stolen = client.cookies.get("ssi_refresh")
-    assert client.post("/api/auth/refresh", headers=CSRF).status_code == 200
-    legit = client.cookies.get("ssi_refresh")
-
-    client.cookies.set("ssi_refresh", stolen or "", path="/api/auth")
-    resp = client.post("/api/auth/refresh", headers=CSRF)
-    assert resp.status_code == 401
-    assert "ssi_refresh=" in resp.headers["set-cookie"]  # cookie cleared
-
-    client.cookies.set("ssi_refresh", legit or "", path="/api/auth")
-    assert client.post("/api/auth/refresh", headers=CSRF).status_code == 401
-
-
 def test_refresh_requires_csrf_header(client: TestClient) -> None:
     register(client, "s@example.com")
     assert client.post("/api/auth/refresh").status_code == 403
@@ -107,3 +92,39 @@ def test_access_token_lifetime_is_short(client: TestClient) -> None:
     register(client, "s@example.com")
     payload = jwt.decode(_login(client), options={"verify_signature": False})
     assert payload["exp"] - payload["iat"] == 15 * 60
+
+
+def test_concurrent_refresh_from_two_tabs_keeps_session(client: TestClient) -> None:
+    register(client, "s@example.com")
+    shared = client.cookies.get("ssi_refresh") or ""
+    assert client.post("/api/auth/refresh", headers=CSRF).status_code == 200  # tab A
+    tab_a = client.cookies.get("ssi_refresh") or ""
+    client.cookies.set("ssi_refresh", shared, path="/api/auth")  # tab B, same old cookie
+    assert client.post("/api/auth/refresh", headers=CSRF).status_code == 200
+    client.cookies.set("ssi_refresh", tab_a, path="/api/auth")
+    assert client.post("/api/auth/refresh", headers=CSRF).status_code == 200  # A still valid
+
+
+def test_grace_window_does_not_survive_logout(client: TestClient) -> None:
+    register(client, "s@example.com")
+    old = client.cookies.get("ssi_refresh") or ""
+    client.post("/api/auth/refresh", headers=CSRF)
+    client.post("/api/auth/logout", headers=CSRF)
+    client.cookies.set("ssi_refresh", old, path="/api/auth")
+    assert client.post("/api/auth/refresh", headers=CSRF).status_code == 401
+
+
+def test_reuse_after_grace_window_revokes_family(client: TestClient, db: Session) -> None:
+    register(client, "s@example.com")
+    old = client.cookies.get("ssi_refresh") or ""
+    client.post("/api/auth/refresh", headers=CSRF)
+    current = client.cookies.get("ssi_refresh") or ""
+    long_ago = datetime.now(UTC) - timedelta(minutes=5)
+    db.execute(
+        update(RefreshToken).where(RefreshToken.revoked_at.is_not(None)).values(revoked_at=long_ago)
+    )
+    db.commit()
+    client.cookies.set("ssi_refresh", old, path="/api/auth")
+    assert client.post("/api/auth/refresh", headers=CSRF).status_code == 401
+    client.cookies.set("ssi_refresh", current, path="/api/auth")
+    assert client.post("/api/auth/refresh", headers=CSRF).status_code == 401

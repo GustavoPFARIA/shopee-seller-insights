@@ -160,7 +160,8 @@ def test_invitation_lifecycle(client: TestClient, auth_headers: dict[str, str]) 
         == 204
     )
     assert client.get("/api/members/invitations", headers=auth_headers).json() == []
-    assert _invite(client, auth_headers, "seller-a@example.com", "viewer")[0] == 409
+    # No account probing: inviting a registered e-mail looks like any other invite.
+    assert _invite(client, auth_headers, "seller-b-not-member@example.com", "viewer")[0] == 201
 
 
 def test_accept_rejects_email_registered_meanwhile(
@@ -175,3 +176,44 @@ def test_accept_rejects_email_registered_meanwhile(
         "/api/auth/accept-invite", json={"token": body["token"], "password": "member-password-123"}
     )
     assert resp.status_code == 409
+
+
+def test_invite_does_not_reveal_registered_emails(
+    client: TestClient, auth_headers: dict[str, str], other_headers: dict[str, str]
+) -> None:
+    code, body = _invite(client, auth_headers, "seller-b@example.com", "viewer")
+    assert code == 201  # same answer as for an unknown e-mail
+    resp = client.post(
+        "/api/auth/accept-invite", json={"token": body["token"], "password": "member-password-123"}
+    )
+    assert resp.status_code == 409  # only the invitee learns about the conflict
+
+
+def test_membership_changes_are_serialized_per_shop(
+    client: TestClient, auth_headers: dict[str, str], db: Session
+) -> None:
+    """While one transaction holds the shop lock, a role change must wait."""
+    import pytest
+    from sqlalchemy import text
+    from sqlalchemy.exc import OperationalError
+
+    from app.db import get_sessionmaker
+    from app.models import Seller
+    from app.services import members
+
+    _join(client, auth_headers, "co@example.com", "owner")
+    seller_id = db.scalar(select(User.seller_id).where(User.email == "co@example.com"))
+    co_id = db.scalar(select(User.id).where(User.email == "co@example.com"))
+    assert seller_id is not None and co_id is not None
+    holder = get_sessionmaker()()
+    holder.execute(select(Seller.id).where(Seller.id == seller_id).with_for_update())
+    waiter = get_sessionmaker()()
+    try:
+        waiter.execute(text("SET lock_timeout = '300ms'"))
+        with pytest.raises(OperationalError, match="lock timeout"):
+            members.change_role(waiter, seller_id=seller_id, user_id=co_id, role="viewer")
+    finally:
+        waiter.rollback()
+        waiter.close()
+        holder.rollback()
+        holder.close()

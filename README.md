@@ -233,8 +233,11 @@ states, stored hashed. `rate_limit_hits` holds the rate-limit counters, keyed by
    - `TOKEN_ENCRYPTION_KEY`, a Fernet key. The command to generate one is in `.env.example`.
 2. **Authorization.** A shop **owner** clicks *Connect Shopee shop* and authorizes on
    Shopee. Shopee then sends the browser back to `/api/shopee/callback`.
-   - The callback checks a single-use `state` (CSRF), exchanges the code for tokens and
-     stores the tokens **encrypted**.
+   - The callback checks a single-use `state` (CSRF). The state is also **bound to the
+     browser** that started the flow through an HttpOnly cookie, so an attacker cannot
+     send their authorization link to a victim to get the victim's shop linked to the
+     attacker's account.
+   - It then exchanges the code for tokens and stores the tokens **encrypted**.
    - A Shopee shop can be linked to only one account.
 3. **Order sync.**
    - Orders are listed by `update_time` in 15-day windows, which is the API limit. The
@@ -242,15 +245,21 @@ states, stored hashed. `rate_limit_hits` holds the rate-limit counters, keyed by
    - Details come from `get_order_detail` in batches of 50.
    - Exact fees come from `get_escrow_detail`: commission, service + transaction fee,
      seller voucher, and shipping net of the Shopee rebate and the buyer-paid part.
-   - Orders still in progress are re-checked until the escrow statement is final.
+   - Orders still in progress are re-checked until the escrow statement is final. This
+     includes completed orders whose escrow call failed, which would otherwise fall
+     behind the high-water mark.
+   - For Brazil, `net_commission_fee` and `net_service_fee` are used when present.
    - **The recipient address is never requested.** The buyer username is pseudonymized,
      as with uploads.
 4. **Stock sync.** `get_item_list`, then `get_item_base_info`, then `get_model_list`.
    Stock is matched to the catalogue by SKU.
 5. **Scheduling.**
-   - The `worker` container syncs every `SHOPEE_SYNC_INTERVAL_MINUTES` minutes. A
-     PostgreSQL advisory lock prevents two syncs of the same shop at once, for example
-     the worker and "Sync now".
+   - The `worker` container syncs every `SHOPEE_SYNC_INTERVAL_MINUTES` minutes.
+   - **"Sync now" only queues a run** (HTTP 202). The worker picks it up within
+     seconds, so a first backfill with thousands of API calls never runs inside an HTTP
+     request. The UI polls until the run finishes.
+   - Queued runs are claimed with `FOR UPDATE SKIP LOCKED`, and a PostgreSQL advisory
+     lock prevents two syncs of the same shop at once.
    - Expired access tokens are refreshed automatically. When the 30-day refresh token
      expires, the run is recorded as `reauthorization_required`.
    - Every run is listed on the Shopee tab.
@@ -263,12 +272,12 @@ uploads keep working.
 | Concern | Decision |
 |---|---|
 | Authentication | **Argon2id** password hashes. Short-lived JWT access token (15 min), kept **in memory only** in the browser. Login does a dummy hash for unknown e-mails, so timing does not reveal which e-mails exist. |
-| Sessions | The refresh token is opaque, sits in an **HttpOnly, SameSite=Strict** cookie scoped to `/api/auth`, and is stored only as SHA-256. It **rotates on every use**. Reusing a token that was already rotated revokes the whole session family, since that signals theft. `/refresh` and `/logout` also require an `X-Requested-With` header against CSRF. Production refuses `COOKIE_SECURE=false`. |
-| Authorization | Each request checks the user's role, read from the database (owner, manager, viewer), so a role change or removal applies at once. Removing a member also revokes their sessions. A shop can never lose its last owner. |
+| Sessions | The refresh token is opaque, sits in an **HttpOnly, SameSite=Strict** cookie scoped to `/api/auth`, and is stored only as SHA-256. It **rotates on every use**. Reusing a token that was already rotated revokes the whole session family, since that signals theft. A 30-second grace window lets two tabs refresh at the same moment. `/refresh` and `/logout` also require an `X-Requested-With` header against CSRF. Production refuses `COOKIE_SECURE=false`. |
+| Authorization | Each request checks the user's role, read from the database (owner, manager, viewer), so a role change or removal applies at once. Removing a member also revokes their sessions. Membership changes lock the shop row, so a shop can never lose its last owner, even when two owners act at the same time. Invitations do not reveal which e-mails already have an account. |
 | Tenant isolation | Every query filters by the authenticated user's `seller_id`, plus a second filter on joined tables. A foreign id answers 404, like a missing one. Covered by tests on every endpoint. |
 | Secrets | Read only from the environment via `pydantic-settings`. `.env` is git-ignored. The API **refuses to start** with the compose `dev-only` defaults when `APP_ENV=production`. gitleaks scans the full git history in CI. |
 | Third-party tokens | Shopee access and refresh tokens are encrypted with Fernet (`TOKEN_ENCRYPTION_KEY`). HTTP client loggers are capped at WARNING, because Shopee puts `access_token` in the query string. A regression test checks that no token reaches the logs. |
-| OAuth | The `state` is single-use, expires in 10 minutes and is stored as SHA-256. The callback redirects only with fixed error codes. |
+| OAuth | The `state` is single-use, expires in 10 minutes, is stored as SHA-256 and is **bound to the initiating browser** with an HttpOnly cookie. The callback redirects only with fixed error codes. |
 | Invitations | One-time tokens, valid 72 hours, stored as SHA-256. The link carries the token in the **URL fragment** (`/#invite=…`), so it never reaches server logs or `Referer` headers. |
 | Uploads | Extension allow-list, max size and max rows, UTF-8 check, XLSX magic bytes and a zip-bomb guard. Imports are all-or-nothing. |
 | CSV/formula injection | Text cells starting with `= + - @ \t \r` are rejected on import and on Shopee sync. Exports prefix such cells with `'`. |
@@ -338,7 +347,7 @@ pytest                                                     # fails below 85% cov
 cd ../frontend && npm run lint && npm run build
 ```
 
-The backend suite has 155 tests at ~99% coverage. It runs against a **real
+The backend suite has 169 tests at ~98% coverage. It runs against a **real
 PostgreSQL 16**, using the real Alembic migrations. It covers:
 
 - idempotent re-upload and sync

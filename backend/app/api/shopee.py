@@ -1,8 +1,9 @@
 """Shopee Open Platform connection and synchronization endpoints."""
 
+import secrets
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 
@@ -21,6 +22,7 @@ sync_limit = rate_limit(
     lambda: get_settings().upload_rate_limit,
     lambda: get_settings().upload_rate_window_seconds,
 )
+OAUTH_COOKIE = "ssi_oauth_state"
 CALLBACK_ERRORS = {"invalid_state", "shop_already_connected", "exchange_failed", "missing_params"}
 
 
@@ -56,9 +58,21 @@ def get_status(user: CurrentUser, db: DbSession) -> ShopeeStatus:
 
 
 @router.post("/connect", response_model=AuthorizationUrl)
-def connect(owner: OwnerUser, db: DbSession) -> AuthorizationUrl:
-    url = shopee_sync.start_authorization(
+def connect(owner: OwnerUser, db: DbSession, response: Response) -> AuthorizationUrl:
+    url, state = shopee_sync.start_authorization(
         db, _client(), seller_id=owner.seller_id, user_id=owner.id
+    )
+    # Bind the flow to this browser: the callback must come back with this cookie.
+    # Otherwise an attacker could send their own authorization link to a victim
+    # seller and get the victim's shop linked to the attacker's account.
+    response.set_cookie(
+        OAUTH_COOKIE,
+        state,
+        max_age=int(shopee_sync.STATE_TTL.total_seconds()),
+        httponly=True,
+        secure=get_settings().cookie_secure,
+        samesite="lax",  # sent on the top-level redirect back from Shopee
+        path="/api/shopee/callback",
     )
     return AuthorizationUrl(authorization_url=url)
 
@@ -69,6 +83,7 @@ def callback(
     state: Annotated[str | None, Query(max_length=200)] = None,
     code: Annotated[str | None, Query(max_length=500)] = None,
     shop_id: Annotated[int | None, Query(gt=0)] = None,
+    ssi_oauth_state: Annotated[str | None, Cookie()] = None,
 ) -> RedirectResponse:
     """Shopee redirects the browser here after the owner authorizes the shop.
 
@@ -79,6 +94,8 @@ def callback(
     outcome = "connected"
     if not state or not code or shop_id is None:
         outcome = "error:missing_params"
+    elif not ssi_oauth_state or not secrets.compare_digest(ssi_oauth_state, state):
+        outcome = "error:invalid_state"  # started in another browser (or cookie expired)
     else:
         try:
             shopee_sync.complete_authorization(db, client, state=state, code=code, shop_id=shop_id)
@@ -87,20 +104,28 @@ def callback(
             outcome = f"error:{reason if reason in CALLBACK_ERRORS else 'exchange_failed'}"
         except ShopeeApiError:
             outcome = "error:exchange_failed"
-    return RedirectResponse(f"/#shopee={outcome}", status_code=status.HTTP_303_SEE_OTHER)
+    redirect = RedirectResponse(f"/#shopee={outcome}", status_code=status.HTTP_303_SEE_OTHER)
+    redirect.delete_cookie(OAUTH_COOKIE, path="/api/shopee/callback")
+    return redirect
 
 
-@router.post("/sync", response_model=SyncRunOut, dependencies=[Depends(sync_limit)])
+@router.post(
+    "/sync",
+    response_model=SyncRunOut,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(sync_limit)],
+)
 def sync_now(user: EditorUser, db: DbSession) -> SyncRun:
-    client = _client()
+    """Queue a sync; the worker runs it in the background (poll /status for progress).
+
+    A first sync can mean thousands of API calls, far longer than an HTTP request
+    should take, so it never runs inside the request.
+    """
+    _client()  # 503 if the integration is not configured
     try:
-        return shopee_sync.sync_seller(db, client, user.seller_id, trigger="manual")
+        return shopee_sync.request_sync(db, user.seller_id)
     except shopee_sync.OAuthError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No Shopee shop connected") from None
-    except shopee_sync.SyncBusyError:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "A synchronization is already running"
-        ) from None
 
 
 @router.delete("/connection", status_code=status.HTTP_204_NO_CONTENT)

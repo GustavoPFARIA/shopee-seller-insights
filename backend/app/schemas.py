@@ -185,7 +185,7 @@ class SyncRunOut(BaseModel):
 
     id: int
     trigger: Literal["manual", "scheduled"]
-    status: Literal["running", "success", "error"]
+    status: Literal["queued", "running", "success", "error"]
     started_at: datetime
     finished_at: datetime | None
     orders_created: int

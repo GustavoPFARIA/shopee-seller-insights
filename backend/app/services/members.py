@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from app.models import Invitation, User
+from app.models import Invitation, Seller, User
 from app.security import hash_password
 from app.services import sessions
 
@@ -25,6 +25,12 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def _lock_shop(db: Session, seller_id: int) -> None:
+    """Serialize membership changes of one shop (prevents losing the last owner
+    when two owners demote or remove each other at the same time)."""
+    db.execute(select(Seller.id).where(Seller.id == seller_id).with_for_update())
+
+
 def _owner_count(db: Session, seller_id: int) -> int:
     return int(
         db.scalar(
@@ -40,8 +46,9 @@ def create_invitation(
     db: Session, *, seller_id: int, invited_by: int, email: str, role: str
 ) -> tuple[Invitation, str]:
     email = email.lower()
-    if db.scalar(select(User.id).where(User.email == email)) is not None:
-        raise MembershipError(409, "This e-mail already has an account")
+    # Deliberately no check against existing accounts here: answering "already
+    # registered" would let any owner probe which e-mails use the platform. A
+    # conflict is reported to the invitee when they accept.
     # A new invite replaces any pending one for the same e-mail in this shop.
     db.execute(
         delete(Invitation).where(
@@ -88,6 +95,7 @@ def accept_invitation(db: Session, token: str, password: str) -> User:
 
 
 def change_role(db: Session, *, seller_id: int, user_id: int, role: str) -> User:
+    _lock_shop(db, seller_id)
     member = _get_member(db, seller_id, user_id)
     if member.role == "owner" and role != "owner" and _owner_count(db, seller_id) <= 1:
         raise MembershipError(409, "A shop must keep at least one owner")
@@ -97,6 +105,7 @@ def change_role(db: Session, *, seller_id: int, user_id: int, role: str) -> User
 
 
 def remove_member(db: Session, *, seller_id: int, user_id: int) -> None:
+    _lock_shop(db, seller_id)
     member = _get_member(db, seller_id, user_id)
     if member.role == "owner" and _owner_count(db, seller_id) <= 1:
         raise MembershipError(409, "A shop must keep at least one owner")

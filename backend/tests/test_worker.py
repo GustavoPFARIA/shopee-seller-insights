@@ -172,3 +172,40 @@ def test_logs_never_contain_shopee_tokens(
     for token in list(fake.access) + list(fake.refresh):
         assert token not in caplog.text
     assert "access_token=" not in caplog.text
+
+
+def test_reauthorization_is_recorded_once(
+    client: TestClient, auth_headers: dict[str, str], fake: FakeShopee, db: Session
+) -> None:
+    _connect(client, auth_headers)
+    db.execute(
+        update(ShopeeConnection).values(refresh_expires_at=datetime.now(UTC) - timedelta(days=1))
+    )
+    db.commit()
+    for _ in range(3):
+        worker.run_cycle()
+    errors = db.scalars(select(SyncRun.error)).all()
+    assert errors == ["reauthorization_required"]
+
+
+def test_queued_run_for_shop_needing_reauth_is_closed(
+    client: TestClient, auth_headers: dict[str, str], fake: FakeShopee, db: Session
+) -> None:
+    _connect(client, auth_headers)
+    client.post("/api/shopee/sync", headers=auth_headers)
+    db.execute(
+        update(ShopeeConnection).values(refresh_expires_at=datetime.now(UTC) - timedelta(days=1))
+    )
+    db.commit()
+    assert worker.process_queue() == 1
+    assert db.scalar(select(SyncRun.error)) == "reauthorization_required"
+
+
+def test_queued_run_for_disconnected_shop_is_closed(
+    client: TestClient, auth_headers: dict[str, str], fake: FakeShopee, db: Session
+) -> None:
+    _connect(client, auth_headers)
+    client.post("/api/shopee/sync", headers=auth_headers)
+    client.delete("/api/shopee/connection", headers=auth_headers)
+    assert worker.process_queue() == 1
+    assert db.scalar(select(SyncRun.status)) == "error"

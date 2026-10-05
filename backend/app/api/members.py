@@ -5,12 +5,19 @@ from typing import NoReturn
 from fastapi import APIRouter, HTTPException, Response, status
 from sqlalchemy import delete, select
 
-from app.deps import CurrentUser, DbSession, OwnerUser
+from app.config import get_settings
+from app.deps import CurrentUser, DbSession, OwnerUser, rate_limit
 from app.models import Invitation, User
 from app.schemas import InvitationCreate, InvitationCreated, InvitationOut, MemberOut, MemberUpdate
 from app.services import members
 
 router = APIRouter(prefix="/api/members", tags=["members"])
+
+invite_limit = rate_limit(
+    "invite",
+    lambda: get_settings().upload_rate_limit,
+    lambda: get_settings().upload_rate_window_seconds,
+)
 
 
 def _raise(exc: members.MembershipError) -> NoReturn:

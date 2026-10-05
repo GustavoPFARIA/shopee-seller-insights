@@ -133,3 +133,17 @@ def test_import_requires_auth_and_size_limit(
     assert client.get("/api/products/template.csv").status_code == 401
     big = b"a" * (get_settings().max_upload_mb * 1024 * 1024 + 1)
     assert _import(client, auth_headers, big)[0] == 413
+
+
+def test_long_sku_roundtrip(client: TestClient, auth_headers: dict[str, str], db: Session) -> None:
+    long_sku = "SKU-" + "Z" * 90
+    resp = client.post(
+        "/api/uploads",
+        headers=auth_headers,
+        files={"file": ("o.csv", build_csv([Line("O1", long_sku, "10.00")]))},
+    )
+    assert resp.status_code == 201, resp.text
+    template = client.get("/api/products/template.csv", headers=auth_headers).text
+    code, body = _import(client, auth_headers, template.replace(",,,5", ",1.00,3,5").encode())
+    assert code == 200, body
+    assert db.scalar(select(Product.stock_quantity).where(Product.sku == long_sku)) == 3

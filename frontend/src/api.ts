@@ -79,7 +79,7 @@ export interface UploadResult {
 export interface SyncRun {
   id: number
   trigger: 'manual' | 'scheduled'
-  status: 'running' | 'success' | 'error'
+  status: 'queued' | 'running' | 'success' | 'error'
   started_at: string
   finished_at: string | null
   orders_created: number

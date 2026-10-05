@@ -1,71 +1,123 @@
-"""Scheduled Shopee synchronization worker.
+"""Shopee synchronization worker.
 
 Usage:  python -m app.worker [--once]
 
-Runs in its own container (same image as the API). Each cycle syncs every connected
-shop; a failure in one shop never stops the others. Two workers (or a worker and a
-manual "Sync now") cannot sync the same shop at once thanks to the advisory lock.
+Runs in its own container (same image as the API). It executes manual syncs queued
+by "Sync now" (checked every few seconds) and a scheduled sync of every connected
+shop every SHOPEE_SYNC_INTERVAL_MINUTES. A failure in one shop never stops the
+others, and a PostgreSQL advisory lock prevents two syncs of the same shop at once.
 """
 
 import argparse
 import logging
 import signal
 import threading
+import time
 from datetime import UTC, datetime
 from types import FrameType
 
 from sqlalchemy import select
 
 from app.config import get_settings
-from app.crypto import TokenCryptoError
 from app.db import get_sessionmaker
 from app.integrations import shopee_sync
-from app.integrations.shopee_client import ShopeeApiError
+from app.integrations.shopee_client import ShopeeClient
 from app.logging_setup import configure_logging
 from app.models import ShopeeConnection, SyncRun
 
 log = logging.getLogger("app.worker")
 
+QUEUE_POLL_SECONDS = 15
+REAUTH_ERROR = "reauthorization_required"
+
+
+def _record_reauth_once(seller_id: int) -> None:
+    """Record the problem once instead of adding an error row every cycle."""
+    with get_sessionmaker()() as db:
+        last = db.scalar(
+            select(SyncRun)
+            .where(SyncRun.seller_id == seller_id)
+            .order_by(SyncRun.id.desc())
+            .limit(1)
+        )
+        if last is not None and last.error == REAUTH_ERROR:
+            return
+        db.add(
+            SyncRun(
+                seller_id=seller_id,
+                trigger="scheduled",
+                status="error",
+                finished_at=datetime.now(UTC),
+                error=REAUTH_ERROR,
+            )
+        )
+        db.commit()
+
+
+def _sync_one(client: ShopeeClient, seller_id: int, run_id: int | None = None) -> str:
+    """Sync one shop; returns "synced", "failed", "busy" or "reauth"."""
+    with get_sessionmaker()() as db:
+        conn = db.scalar(select(ShopeeConnection).where(ShopeeConnection.seller_id == seller_id))
+        run = db.get(SyncRun, run_id) if run_id is not None else None
+        if conn is None:
+            if run is not None:
+                run.status, run.error, run.finished_at = "error", "not_connected", datetime.now(UTC)
+                db.commit()
+            return "failed"
+        if conn.refresh_expires_at <= datetime.now(UTC):  # 30-day Shopee refresh token
+            if run is not None:
+                run.status, run.error, run.finished_at = "error", REAUTH_ERROR, datetime.now(UTC)
+                db.commit()
+            else:
+                _record_reauth_once(seller_id)
+            return "reauth"
+        try:
+            result = shopee_sync.sync_seller(
+                db, client, seller_id, trigger="manual" if run else "scheduled", run=run
+            )
+        except shopee_sync.SyncBusyError:
+            return "busy"  # a queued run stays queued and is retried on the next poll
+        except Exception:  # never let one shop kill the worker
+            log.exception("seller %s: unexpected sync error", seller_id)
+            return "failed"
+        return "synced" if result.status == "success" else "failed"
+
+
+def process_queue(client: ShopeeClient | None = None) -> int:
+    """Run every queued manual sync that is not blocked; returns how many ran."""
+    client = client or shopee_sync.make_client()
+    done = 0
+    skipped: set[int] = set()
+    while True:
+        with get_sessionmaker()() as db:
+            query = (
+                select(SyncRun)
+                .where(SyncRun.status == "queued", SyncRun.id.not_in(skipped or {0}))
+                .order_by(SyncRun.id)
+                .limit(1)
+                .with_for_update(skip_locked=True)
+            )
+            run = db.scalar(query)
+            if run is None:
+                return done
+            run_id, seller_id = run.id, run.seller_id
+            db.commit()  # release the row lock; the advisory lock guards the sync itself
+        outcome = _sync_one(client, seller_id, run_id)
+        if outcome == "busy":
+            skipped.add(run_id)
+        else:
+            done += 1
+
 
 def run_cycle() -> dict[str, int]:
-    """Sync all connected shops once; return counters for logging/tests."""
+    """Scheduled sync of all connected shops; returns counters for logging/tests."""
     stats = {"synced": 0, "busy": 0, "failed": 0, "reauth": 0}
     client = shopee_sync.make_client()
     with get_sessionmaker()() as db:
         shopee_sync.mark_stale_runs(db)
-        connections = db.execute(
-            select(ShopeeConnection.seller_id, ShopeeConnection.refresh_expires_at)
-        ).all()
-    for seller_id, refresh_expires_at in connections:
-        with get_sessionmaker()() as db:
-            if refresh_expires_at <= datetime.now(UTC):
-                # Shopee refresh tokens last 30 days: the owner must authorize again.
-                db.add(
-                    SyncRun(
-                        seller_id=seller_id,
-                        trigger="scheduled",
-                        status="error",
-                        finished_at=datetime.now(UTC),
-                        error="reauthorization_required",
-                    )
-                )
-                db.commit()
-                stats["reauth"] += 1
-                continue
-            try:
-                run = shopee_sync.sync_seller(db, client, seller_id, trigger="scheduled")
-            except shopee_sync.SyncBusyError:
-                stats["busy"] += 1
-                continue
-            except (ShopeeApiError, TokenCryptoError, shopee_sync.OAuthError) as exc:
-                log.warning("seller %s: sync failed (%s)", seller_id, type(exc).__name__)
-                stats["failed"] += 1
-                continue
-            except Exception:  # never let one shop kill the worker
-                log.exception("seller %s: unexpected sync error", seller_id)
-                stats["failed"] += 1
-                continue
-            stats["synced" if run.status == "success" else "failed"] += 1
+        seller_ids = db.scalars(select(ShopeeConnection.seller_id)).all()
+    for seller_id in seller_ids:
+        stats[_sync_one(client, seller_id)] += 1
     return stats
 
 
@@ -78,22 +130,26 @@ def main() -> None:
     stop = threading.Event()
 
     def handle_signal(signum: int, _frame: FrameType | None) -> None:
-        log.info("signal %s received, stopping after the current cycle", signum)
+        log.info("signal %s received, stopping", signum)
         stop.set()
 
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 
     interval = settings.shopee_sync_interval_minutes * 60
+    next_cycle = 0.0
     while not stop.is_set():
-        if settings.shopee_enabled:
-            stats = run_cycle()
-            log.info("cycle done: %s", stats)
-        else:
+        if not settings.shopee_enabled:
             log.info("Shopee integration not configured; worker idle")
+        else:
+            if (ran := process_queue()) > 0:
+                log.info("queued syncs done: %s", ran)
+            if time.monotonic() >= next_cycle:
+                log.info("cycle done: %s", run_cycle())
+                next_cycle = time.monotonic() + interval
         if args.once:
             return
-        stop.wait(interval)
+        stop.wait(QUEUE_POLL_SECONDS if settings.shopee_enabled else interval)
 
 
 if __name__ == "__main__":  # pragma: no cover

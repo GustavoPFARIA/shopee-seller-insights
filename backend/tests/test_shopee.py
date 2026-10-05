@@ -14,7 +14,7 @@ from pydantic import SecretStr
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app import crypto
+from app import crypto, worker
 from app.config import get_settings
 from app.integrations import shopee_sync
 from app.integrations.shopee_client import ShopeeApiError, ShopeeClient, sign
@@ -62,9 +62,14 @@ def _connect(client: TestClient, owner: dict[str, str], code: str = "good-code")
 
 
 def _sync(client: TestClient, headers: dict[str, str]) -> dict:  # type: ignore[type-arg]
+    """Queue a manual sync, let the worker run it, return the finished run."""
     resp = client.post("/api/shopee/sync", headers=headers)
-    assert resp.status_code == 200, resp.text
-    return dict(resp.json())
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["status"] in ("queued", "running")
+    worker.process_queue()
+    runs = client.get("/api/shopee/status", headers=headers).json()["runs"]
+    assert runs[0]["id"] == resp.json()["id"]
+    return dict(runs[0])
 
 
 def _item(sku: str, price: float, qty: int = 1, name: str | None = None) -> dict:  # type: ignore[type-arg]
@@ -239,7 +244,7 @@ def test_sync_orders_with_exact_escrow_fees(
         escrow={
             "commission_fee": 30.0,
             "service_fee": 10.0,
-            "transaction_fee": 2.5,
+            "seller_transaction_fee": 2.5,
             "voucher_from_seller": 5.0,
             "actual_shipping_fee": 20.0,
             "shopee_shipping_rebate": 8.0,
@@ -389,14 +394,21 @@ def test_sync_requires_connection_and_editor(
     assert client.post("/api/shopee/sync", headers=auth_headers).status_code == 403
 
 
-def test_concurrent_sync_is_rejected(
+def test_queue_is_idempotent_and_waits_for_a_busy_shop(
     client: TestClient, auth_headers: dict[str, str], fake: FakeShopee
 ) -> None:
     _connect(client, auth_headers)
     seller_id = client.get("/api/auth/me", headers=auth_headers).json()["seller_id"]
-    with shopee_sync.seller_lock(seller_id):
-        assert client.post("/api/shopee/sync", headers=auth_headers).status_code == 409
-    assert client.post("/api/shopee/sync", headers=auth_headers).status_code == 200
+    first = client.post("/api/shopee/sync", headers=auth_headers).json()
+    again = client.post("/api/shopee/sync", headers=auth_headers).json()
+    assert again["id"] == first["id"]  # a second click does not queue twice
+    with shopee_sync.seller_lock(seller_id):  # e.g. the scheduled cycle is running
+        assert worker.process_queue() == 0
+    runs = client.get("/api/shopee/status", headers=auth_headers).json()["runs"]
+    assert runs[0]["status"] == "queued"
+    assert worker.process_queue() == 1
+    runs = client.get("/api/shopee/status", headers=auth_headers).json()["runs"]
+    assert runs[0]["status"] == "success"
 
 
 # ---- stock sync ---------------------------------------------------------------
@@ -509,3 +521,115 @@ def test_stale_runs_are_closed(
 def test_make_client_requires_configuration() -> None:
     with pytest.raises(shopee_sync.ShopeeNotConfiguredError):
         shopee_sync.make_client()
+
+
+# ---- regression tests from code review ------------------------------------------
+
+
+def test_oauth_link_from_another_browser_is_rejected(
+    client: TestClient, auth_headers: dict[str, str], fake: FakeShopee, db: Session
+) -> None:
+    """An attacker's authorization link must not work in the victim's browser."""
+    url = client.post("/api/shopee/connect", headers=auth_headers).json()["authorization_url"]
+    state = parse_qs(urlparse(parse_qs(urlparse(url).query)["redirect"][0]).query)["state"][0]
+    from app.main import create_app
+
+    victim_browser = TestClient(create_app())  # no ssi_oauth_state cookie
+    resp = victim_browser.get(
+        "/api/shopee/callback",
+        params={"state": state, "code": "good-code", "shop_id": SHOP_ID},
+        follow_redirects=False,
+    )
+    assert resp.headers["location"] == "/#shopee=error:invalid_state"
+    assert db.scalar(select(ShopeeConnection)) is None
+    assert fake.calls["/api/v2/auth/token/get"] == 0
+
+
+def test_oauth_cookie_is_scoped_and_cleared(
+    client: TestClient, auth_headers: dict[str, str], fake: FakeShopee
+) -> None:
+    resp = client.post("/api/shopee/connect", headers=auth_headers)
+    cookie = resp.headers["set-cookie"].lower()
+    for flag in ("ssi_oauth_state=", "httponly", "path=/api/shopee/callback", "samesite=lax"):
+        assert flag in cookie
+    assert _connect(client, auth_headers) == "/#shopee=connected"
+
+
+def test_failed_escrow_is_retried_on_later_syncs(
+    client: TestClient, auth_headers: dict[str, str], fake: FakeShopee, db: Session
+) -> None:
+    _connect(client, auth_headers)
+    fake.add_order(
+        "E1",
+        status="COMPLETED",
+        create_time=fake.now - 2 * DAY,
+        items=[_item("SKU-A", 50.0)],
+        escrow={"commission_fee": 7.0},
+    )
+    fake.fail_next = [("/api/v2/payment/get_escrow_detail", 400, "error_busy")]
+    _sync(client, auth_headers)
+    order = db.scalar(select(Order).where(Order.order_sn == "E1"))
+    assert order is not None and not order.fees_final
+    # E1 is not updated again on Shopee's side: it falls behind the high-water mark,
+    # but the pending-escrow re-check still picks it up.
+    _sync(client, auth_headers)
+    db.expire_all()
+    order = db.scalar(select(Order).where(Order.order_sn == "E1"))
+    assert order is not None and order.fees_final
+    fee = db.scalar(select(OrderItem.commission_fee).where(OrderItem.order_id == order.id))
+    assert fee == Decimal("7.00")
+
+
+def test_brazil_net_fees_take_precedence() -> None:
+    fees = shopee_sync._fees_from_escrow(
+        {
+            "commission_fee": 20.0,
+            "net_commission_fee": 18.0,
+            "service_fee": 5.0,
+            "net_service_fee": 4.0,
+            "credit_card_transaction_fee": 1.0,
+        }
+    )
+    assert fees["commission_fee"] == Decimal("18.00")
+    assert fees["service_fee"] == Decimal("5.00")  # 4 net service + 1 transaction
+
+
+def test_unexpected_errors_end_the_run_cleanly(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    fake: FakeShopee,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _connect(client, auth_headers)
+
+    def broken(*_a: object, **_k: object) -> None:
+        raise KeyError("item_id")
+
+    monkeypatch.setattr(shopee_sync, "_sync_stock", broken)
+    run = _sync(client, auth_headers)
+    assert (run["status"], run["error"]) == ("error", "internal_error: KeyError")
+    monkeypatch.setattr(
+        shopee_sync, "_sync_stock", lambda *_a: (_ for _ in ()).throw(crypto.TokenCryptoError())
+    )
+    run = _sync(client, auth_headers)
+    assert run["error"].startswith("token_decryption_failed")
+
+
+def test_long_skus_are_supported(
+    client: TestClient, auth_headers: dict[str, str], fake: FakeShopee, db: Session
+) -> None:
+    _connect(client, auth_headers)
+    long_sku = "SKU-" + "X" * 90  # 94 chars: valid for products.sku (100)
+    fake.add_order("L1", status="UNPAID", create_time=fake.now, items=[_item(long_sku, 3.0)])
+    fake.shops[SHOP_ID].items = [
+        {
+            "item_id": 9,
+            "item_sku": "NEW-" + "Y" * 90,
+            "item_name": "Long",
+            "has_model": False,
+            **stock(2),
+        }
+    ]
+    assert _sync(client, auth_headers)["orders_created"] == 1
+    skus = set(db.scalars(select(Product.sku)))
+    assert long_sku in skus and "NEW-" + "Y" * 90 in skus

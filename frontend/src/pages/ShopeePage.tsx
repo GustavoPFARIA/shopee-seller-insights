@@ -25,6 +25,14 @@ export default function ShopeePage({ me, callback }: { me: Me; callback: string 
     load()
   }, [load])
 
+  // A manual sync runs in the background worker: refresh until it finishes.
+  const inProgress = status?.runs.some((r) => r.status === 'queued' || r.status === 'running') ?? false
+  useEffect(() => {
+    if (!inProgress) return
+    const timer = window.setTimeout(load, 3000)
+    return () => window.clearTimeout(timer)
+  }, [inProgress, status, load])
+
   const act = async (action: () => Promise<unknown>) => {
     setBusy(true)
     setError(null)
@@ -80,8 +88,8 @@ export default function ShopeePage({ me, callback }: { me: Me; callback: string 
             </p>
             <div className="filters">
               {canSync && (
-                <button className="primary" onClick={() => act(api.shopeeSync)} disabled={busy}>
-                  {busy ? 'Syncing…' : 'Sync now'}
+                <button className="primary" onClick={() => act(api.shopeeSync)} disabled={busy || inProgress}>
+                  {inProgress ? 'Syncing…' : 'Sync now'}
                 </button>
               )}
               {isOwner && (

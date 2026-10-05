@@ -19,15 +19,15 @@ from sqlalchemy import delete, select, text, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.crypto import decrypt, encrypt
+from app.crypto import TokenCryptoError, decrypt, encrypt
 from app.db import get_engine
 from app.integrations.shopee_client import ShopeeApiError, ShopeeAuthError, ShopeeClient
 from app.models import OAuthState, Order, Product, ShopeeConnection, SyncRun
 from app.services.importer import (
     STATUS_ALIASES,
-    Identifier,
     OrderRow,
     SafeText,
+    Sku,
     upsert_api_orders,
 )
 
@@ -40,6 +40,7 @@ SYNC_OVERLAP = timedelta(minutes=10)
 LOCK_NAMESPACE = 7_300_000_000
 # Escrow (exact fees) only exists once the buyer has paid.
 ESCROW_STATUSES = {"to_ship", "shipped", "completed"}
+PENDING_ESCROW_LIMIT = 200
 
 
 class ShopeeNotConfiguredError(Exception):
@@ -74,8 +75,11 @@ def _hash(value: str) -> str:
 # ---- OAuth -------------------------------------------------------------------
 
 
-def start_authorization(db: Session, client: ShopeeClient, *, seller_id: int, user_id: int) -> str:
-    """Return the Shopee URL the owner must visit; binds a single-use state to them."""
+def start_authorization(
+    db: Session, client: ShopeeClient, *, seller_id: int, user_id: int
+) -> tuple[str, str]:
+    """Return (Shopee URL the owner must visit, state). The state is single-use and
+    bound to the owner; the API also binds it to their browser with a cookie."""
     state = secrets.token_urlsafe(32)
     db.execute(delete(OAuthState).where(OAuthState.expires_at < datetime.now(UTC)))
     db.add(
@@ -88,7 +92,7 @@ def start_authorization(db: Session, client: ShopeeClient, *, seller_id: int, us
     )
     db.commit()
     redirect = f"{get_settings().shopee_redirect_url}?{urlencode({'state': state})}"
-    return client.authorization_url(redirect)
+    return client.authorization_url(redirect), state
 
 
 def complete_authorization(
@@ -186,14 +190,27 @@ def seller_lock(seller_id: int) -> Iterator[None]:
 
 
 def sync_seller(
-    db: Session, client: ShopeeClient, seller_id: int, *, trigger: str = "manual"
+    db: Session,
+    client: ShopeeClient,
+    seller_id: int,
+    *,
+    trigger: str = "manual",
+    run: SyncRun | None = None,
 ) -> SyncRun:
+    """Synchronize one shop. `run` is a queued run to execute (else a new one is created).
+
+    Any failure ends the run as "error" with a safe message: the API error code, or
+    only the exception class for unexpected errors (never tokens or payloads).
+    """
     conn = db.scalar(select(ShopeeConnection).where(ShopeeConnection.seller_id == seller_id))
     if conn is None:
         raise OAuthError("not_connected")
     with seller_lock(seller_id):
-        run = SyncRun(seller_id=seller_id, trigger=trigger, status="running")
-        db.add(run)
+        if run is None:
+            run = SyncRun(seller_id=seller_id, trigger=trigger)
+            db.add(run)
+        run.status = "running"
+        run.started_at = datetime.now(UTC)
         db.commit()
         try:
             _sync_orders(db, client, conn, run)
@@ -202,9 +219,18 @@ def sync_seller(
         except ShopeeApiError as exc:
             db.rollback()
             run.status = "error"
-            # Only the API error code/message: never tokens or payloads.
             run.error = str(exc)[:500]
             log.warning("Shopee sync failed for seller %s: %s", seller_id, exc.error)
+        except TokenCryptoError:
+            db.rollback()
+            run.status = "error"
+            run.error = "token_decryption_failed: reconnect the shop"
+            log.error("seller %s: stored Shopee tokens cannot be decrypted", seller_id)
+        except Exception as exc:
+            db.rollback()
+            run.status = "error"
+            run.error = f"internal_error: {type(exc).__name__}"
+            log.exception("seller %s: unexpected sync error", seller_id)
         run.finished_at = datetime.now(UTC)
         db.commit()
         return run
@@ -215,16 +241,30 @@ def _money(value: Any) -> Decimal:
     return Decimal(str(value or 0)).quantize(Decimal("0.01"))
 
 
+def _first(income: dict[str, Any], *keys: str) -> Decimal:
+    """First present field: newer/regional names first, older names as fallback."""
+    for key in keys:
+        if income.get(key) is not None:
+            return _money(income[key])
+    return Decimal("0.00")
+
+
 def _fees_from_escrow(income: dict[str, Any]) -> dict[str, Decimal]:
+    """Map v2.payment.get_escrow_detail `order_income` to our fee columns.
+
+    Brazil returns net_commission_fee / net_service_fee (net of Shopee rebates); the
+    payment fee is seller_transaction_fee (credit_card_transaction_fee on old shops).
+    """
     shipping = (
         _money(income.get("actual_shipping_fee"))
         - _money(income.get("shopee_shipping_rebate"))
         - _money(income.get("buyer_paid_shipping_fee"))
     )
     return {
-        "commission_fee": _money(income.get("commission_fee")),
+        "commission_fee": _first(income, "net_commission_fee", "commission_fee"),
         # Transaction (payment) fee is folded into the service fee column.
-        "service_fee": _money(income.get("service_fee")) + _money(income.get("transaction_fee")),
+        "service_fee": _first(income, "net_service_fee", "service_fee")
+        + _first(income, "seller_transaction_fee", "credit_card_transaction_fee"),
         "seller_shipping_fee": max(shipping, Decimal("0.00")),
         "seller_voucher": _money(income.get("voucher_from_seller")),
     }
@@ -251,6 +291,20 @@ def _sync_orders(db: Session, client: ShopeeClient, conn: ShopeeConnection, run:
             )
         )
     )
+    # Completed API orders without final escrow (e.g. the escrow call failed last time)
+    # would never be listed again once the high-water mark moves past them.
+    pending = db.scalars(
+        select(Order.order_sn)
+        .where(
+            Order.seller_id == conn.seller_id,
+            Order.source == "shopee_api",
+            Order.status == "completed",
+            Order.fees_final.is_(False),
+        )
+        .order_by(Order.ordered_at.desc())
+        .limit(PENDING_ESCROW_LIMIT)
+    ).all()
+    sns = list(dict.fromkeys([*sns, *pending]))
     if sns:
         details = _call(db, client, conn, lambda t: client.get_order_details(t, conn.shop_id, sns))
         final_already = set(
@@ -397,7 +451,7 @@ def _sync_stock(db: Session, client: ShopeeClient, conn: ShopeeConnection) -> in
 
 
 class _NewProduct(BaseModel):
-    sku: Identifier
+    sku: Sku
     name: SafeText
 
 
@@ -416,3 +470,24 @@ def mark_stale_runs(db: Session) -> None:
         .values(status="error", error="interrupted", finished_at=datetime.now(UTC))
     )
     db.commit()
+
+
+def request_sync(db: Session, seller_id: int) -> SyncRun:
+    """Queue a manual sync for the worker; reuse a run already queued or running."""
+    if (
+        db.scalar(select(ShopeeConnection.id).where(ShopeeConnection.seller_id == seller_id))
+        is None
+    ):
+        raise OAuthError("not_connected")
+    pending = db.scalar(
+        select(SyncRun)
+        .where(SyncRun.seller_id == seller_id, SyncRun.status.in_(("queued", "running")))
+        .order_by(SyncRun.id.desc())
+        .limit(1)
+    )
+    if pending is not None:
+        return pending
+    run = SyncRun(seller_id=seller_id, trigger="manual", status="queued")
+    db.add(run)
+    db.commit()
+    return run

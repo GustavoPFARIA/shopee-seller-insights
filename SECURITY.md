@@ -52,6 +52,11 @@ This is a portfolio project, not a hosted service. The main controls are:
   so an XSS bug could make API calls while the tab is open, but it cannot steal the
   long-lived refresh token. The CSP (`script-src 'self'`) and React's output escaping
   reduce that risk.
+- **30-second refresh grace window.** Refresh-token reuse is tolerated for 30 seconds
+  after a rotation, but only while the session is still active. This lets two tabs
+  refresh at the same moment without logging the user out. The trade-off: a stolen
+  token replayed within those 30 seconds is not detected. Reuse after the window still
+  revokes the whole session.
 - **Fixed IP for nginx.** `FORWARDED_ALLOW_IPS` trusts nginx at a fixed address on the
   compose network. Other topologies must set it to their own reverse proxy's address.
 - **Invitations are not e-mailed.** There is no SMTP; the owner shares the one-time

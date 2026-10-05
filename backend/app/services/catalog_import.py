@@ -11,9 +11,9 @@ from sqlalchemy.orm import Session
 from app.models import Product
 from app.services.importer import (
     MAX_REPORTED_ERRORS,
-    Identifier,
     ImportValidationError,
     SafeText,
+    Sku,
     parse_decimal,
     read_spreadsheet,
 )
@@ -62,7 +62,7 @@ def _quantity(value: object) -> int | None:
 class CatalogRow(BaseModel):
     """Empty cells mean "keep the current value"."""
 
-    sku: Identifier
+    sku: Sku
     name: Annotated[SafeText | None, BeforeValidator(_blank)] = None
     unit_cost: Annotated[Decimal | None, BeforeValidator(_cost)] = None
     stock_quantity: Annotated[int | None, BeforeValidator(_quantity)] = None

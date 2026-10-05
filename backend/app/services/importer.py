@@ -157,6 +157,8 @@ def _empty_to_none(value: object) -> object:
 Identifier = Annotated[
     str, Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 ]
+# Shopee SKUs can be up to 100 characters (same as products.sku).
+Sku = Annotated[str, Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")]
 SafeText = Annotated[str, Field(min_length=1, max_length=255), AfterValidator(_no_formula)]
 Money = Annotated[Decimal, BeforeValidator(parse_decimal), Field(ge=0, le=Decimal("9999999"))]
 
@@ -167,7 +169,7 @@ class OrderRow(BaseModel):
     order_sn: Identifier
     status: Annotated[OrderStatus, BeforeValidator(_parse_status)]
     ordered_at: Annotated[datetime, BeforeValidator(_parse_datetime)]
-    sku: Annotated[Identifier, Field(max_length=100)]
+    sku: Sku
     product_name: SafeText
     unit_price: Money
     quantity: int = Field(gt=0, le=100_000)
