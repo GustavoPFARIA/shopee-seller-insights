@@ -355,7 +355,14 @@ See [SECURITY.md](SECURITY.md) for known limitations and how to report a vulnera
 
 ## How to run
 
-Requirements: Docker with Compose v2.
+Requirements: Docker with Compose v2 ([Docker Desktop](https://www.docker.com/products/docker-desktop/) on Windows and macOS).
+
+**One click:** download the project ([ZIP](https://github.com/GustavoPFARIA/shopee-seller-insights/archive/refs/heads/main.zip)
+or `git clone`), open Docker Desktop, then double-click **`start.bat`** on Windows or run
+**`./start.sh`** on macOS/Linux. The script checks that Docker is running, starts the
+stack and opens the browser when the app is ready.
+
+Or by hand:
 
 ```bash
 git clone https://github.com/GustavoPFARIA/shopee-seller-insights.git
