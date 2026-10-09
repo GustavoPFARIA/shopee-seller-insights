@@ -34,6 +34,24 @@ alerts you can act on.
   background worker, 216 backend + 16 frontend tests, a 52-check end-to-end smoke test
   and a performance budget in CI.
 
+## Table of contents
+
+- [The problem](#the-problem)
+- [Features](#features)
+- [Tech stack](#tech-stack)
+- [Getting started](#getting-started)
+- [Screenshots](#screenshots)
+- [Architecture](#architecture)
+- [Database schema](#database-schema)
+- [Shopee Open Platform integration](#shopee-open-platform-integration)
+- [Security & data protection](#security--data-protection)
+- [Verification](#verification)
+- [Troubleshooting](#troubleshooting)
+- [Roadmap](#roadmap)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## The problem
 
 Shopee Seller Centre shows gross sales. A seller who wants to know *which products
@@ -88,6 +106,121 @@ syncs without duplicating orders, and it flags what needs attention.
     loads it **through the same importer** that user uploads go through.
   - The fake data has Zipf-like product popularity, weekly seasonality, the real fee
     structure and a realistic mix of order statuses.
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Backend | Python 3.12, FastAPI, Pydantic v2, Uvicorn |
+| Data | PostgreSQL 16, SQLAlchemy 2.0, Alembic, pandas, openpyxl |
+| Frontend | React 19, TypeScript, Vite, Recharts |
+| Integrations | Shopee Open Platform v2 (OAuth, HMAC, webhooks) with httpx and cryptography (Fernet), SMTP |
+| AI | Claude API (`claude-haiku-4-5`), optional, grounded on SQL aggregates |
+| Infrastructure | Docker Compose, nginx (unprivileged), background worker container |
+| Quality | pytest, ruff, mypy `--strict`, Vitest + Testing Library, oxlint, end-to-end smoke test (Python standard library) |
+| CI and security | GitHub Actions, CodeQL, Dependabot, gitleaks, pip-audit, npm audit |
+
+## Getting started
+
+Requirements: Docker with Compose v2 ([Docker Desktop](https://www.docker.com/products/docker-desktop/) on Windows and macOS).
+
+**One click:** download the project ([ZIP](https://github.com/GustavoPFARIA/shopee-seller-insights/archive/refs/heads/main.zip)
+or `git clone`), open Docker Desktop, then double-click **`start.bat`** on Windows or run
+**`./start.sh`** on macOS/Linux. The script checks that Docker is running, starts the
+stack and opens the browser when the app is ready.
+
+Or by hand:
+
+```bash
+git clone https://github.com/GustavoPFARIA/shopee-seller-insights.git
+cd shopee-seller-insights
+docker compose up --build
+```
+
+Open **http://localhost:8080** and sign in:
+
+| E-mail | Password | Role |
+|---|---|---|
+| `demo@shopee-insights.dev` | `DemoPassword123!` | owner |
+| `viewer@shopee-insights.dev` | `DemoPassword123!` | viewer (read-only) |
+| `other@shopee-insights.dev` | `DemoPassword123!` | owner of a different shop (isolation check) |
+
+The demo owner is also a **manager of that other shop**, to show the shop switcher.
+
+On first start the API applies the migrations and loads ~120 days of fake orders.
+Swagger UI is at http://localhost:8080/api/docs. To try an upload, use
+[`docs/sample-orders.csv`](docs/sample-orders.csv), which is fake data in the Seller
+Centre format.
+
+For anything beyond a local demo:
+
+```bash
+cp .env.example .env   # then fill in real secrets (and Shopee credentials, if any)
+```
+
+To stop the stack, run `docker compose down`. Adding `-v` also deletes the database
+volume, and the demo data is loaded again on the next start.
+
+### Using it with your own shop
+
+1. On the sign-in page choose **Create account** and name your shop (keep the demo shop separate).
+2. In Shopee Seller Centre open **My Orders → Export**, pick a period and download the report.
+3. In the app open **Upload report** and drop the file. Re-uploading an overlapping period never duplicates orders.
+4. Open **Products → Download spreadsheet**, fill in `unit_cost` (and `stock_quantity` if you track stock), then **Import spreadsheet**. Margins need the cost.
+5. The **Dashboard** now shows real margin per product, the ABC curve and alerts. Adjust alert thresholds in **Settings**.
+
+To sync automatically instead of uploading, connect the shop through the Shopee Open Platform (see [below](#shopee-open-platform-integration)).
+
+### Configuration
+
+All settings are environment variables, read by `pydantic-settings` and validated at
+startup. Invalid values stop the API with a clear error.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `APP_ENV` | `development` | `production` refuses dev-only secrets and `COOKIE_SECURE=false`, and hides Swagger. |
+| `DATABASE_URL` | – | Connection for the API and worker, using the least-privilege `ssi_app` role. |
+| `MIGRATION_DATABASE_URL` | – | Connection for Alembic, using the schema owner role. |
+| `JWT_SECRET` | – (required, ≥ 32 chars) | Signs access tokens. |
+| `PII_HASH_SECRET` | – (required, ≥ 32 chars) | Key for pseudonymizing buyer usernames. Changing it breaks the link with buyers already stored. |
+| `ACCESS_TOKEN_MINUTES` / `REFRESH_TOKEN_DAYS` | `15` / `7` | Session lifetimes. |
+| `COOKIE_SECURE` | `true` | Send the refresh cookie over HTTPS only. Set `false` only for a local http demo. |
+| `REPORT_TIMEZONE` | `America/Sao_Paulo` | Time zone used to group sales by calendar day. |
+| `CORS_ORIGINS` | `["http://localhost:8080", "http://localhost:5173"]` | Browser origins allowed to call the API directly. |
+| `MAX_UPLOAD_MB` / `MAX_UPLOAD_ROWS` | `5` / `50000` | Upload limits. |
+| `LOGIN_RATE_LIMIT` / `LOGIN_RATE_WINDOW_SECONDS` | `5` / `60` | Login, register and accept-invite attempts per client IP. |
+| `UPLOAD_RATE_LIMIT` / `UPLOAD_RATE_WINDOW_SECONDS` | `10` / `3600` | Limit per client IP, applied separately to uploads, AI summaries, Shopee syncs and invitations. |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | The only proxy address whose `X-Forwarded-For` header is trusted. Compose sets it to nginx's address. |
+| `SEED_DEMO_DATA` | `true` (compose) | Load the fake demo shop on first start. |
+| `ANTHROPIC_API_KEY` | empty | Enables the AI weekly summary. |
+| `SHOPEE_PARTNER_ID`, `SHOPEE_PARTNER_KEY`, `TOKEN_ENCRYPTION_KEY` | empty | Enable the Shopee integration. All three are required. |
+| `SHOPEE_API_HOST` | Shopee test environment | Production: `https://partner.shopeemobile.com`. |
+| `SHOPEE_REDIRECT_URL` | `http://localhost:8080/api/shopee/callback` | Must match the URL registered on the Shopee console. |
+| `SHOPEE_SYNC_INTERVAL_MINUTES` / `SHOPEE_BACKFILL_DAYS` | `30` / `90` | Scheduled sync interval and first-sync history. |
+| `SHOPEE_AUTH_HOST` | same as `SHOPEE_API_HOST` | Host of the browser authorization page (only the demo mode changes it). |
+| `SHOPEE_PUSH_URL` / `SHOPEE_PUSH_KEY` | empty | Enable push notifications. The URL must match the one registered on Shopee exactly. |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` | empty / `587` | Enable e-mail (invitations and the weekly summary). |
+| `SMTP_SECURITY` | `starttls` | `starttls`, `ssl` or `none` (`none` is refused in production). |
+| `APP_BASE_URL` | `http://localhost:8080` | Public address used in e-mailed links. |
+| `WEB_PORT` | `8080` | Host port of the web app (compose only). |
+
+### Local development without Docker
+
+```bash
+docker run -d --name ssi-db -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=shopee_insights_test -p 5433:5432 postgres:16-alpine
+
+cd backend
+python3.12 -m venv .venv && . .venv/bin/activate
+pip install -r requirements-dev.txt
+export DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5433/shopee_insights_test
+export MIGRATION_DATABASE_URL=$DATABASE_URL COOKIE_SECURE=false
+export JWT_SECRET=$(python -c "import secrets;print(secrets.token_urlsafe(48))")
+export PII_HASH_SECRET=$(python -c "import secrets;print(secrets.token_urlsafe(48))")
+alembic upgrade head && python -m app.seed
+uvicorn app.main:app --reload
+
+cd ../frontend && npm ci && npm run dev   # http://localhost:5173 (proxies /api to :8000)
+```
 
 ## Screenshots
 
@@ -356,98 +489,6 @@ uploads keep working.
 
 See [SECURITY.md](SECURITY.md) for known limitations and how to report a vulnerability.
 
-## How to run
-
-Requirements: Docker with Compose v2 ([Docker Desktop](https://www.docker.com/products/docker-desktop/) on Windows and macOS).
-
-**One click:** download the project ([ZIP](https://github.com/GustavoPFARIA/shopee-seller-insights/archive/refs/heads/main.zip)
-or `git clone`), open Docker Desktop, then double-click **`start.bat`** on Windows or run
-**`./start.sh`** on macOS/Linux. The script checks that Docker is running, starts the
-stack and opens the browser when the app is ready.
-
-Or by hand:
-
-```bash
-git clone https://github.com/GustavoPFARIA/shopee-seller-insights.git
-cd shopee-seller-insights
-docker compose up --build
-```
-
-Open **http://localhost:8080** and sign in:
-
-| E-mail | Password | Role |
-|---|---|---|
-| `demo@shopee-insights.dev` | `DemoPassword123!` | owner |
-| `viewer@shopee-insights.dev` | `DemoPassword123!` | viewer (read-only) |
-| `other@shopee-insights.dev` | `DemoPassword123!` | owner of a different shop (isolation check) |
-
-The demo owner is also a **manager of that other shop**, to show the shop switcher.
-
-On first start the API applies the migrations and loads ~120 days of fake orders.
-Swagger UI is at http://localhost:8080/api/docs. To try an upload, use
-[`docs/sample-orders.csv`](docs/sample-orders.csv), which is fake data in the Seller
-Centre format.
-
-For anything beyond a local demo:
-
-```bash
-cp .env.example .env   # then fill in real secrets (and Shopee credentials, if any)
-```
-
-To stop the stack, run `docker compose down`. Adding `-v` also deletes the database
-volume, and the demo data is loaded again on the next start.
-
-### Configuration
-
-All settings are environment variables, read by `pydantic-settings` and validated at
-startup. Invalid values stop the API with a clear error.
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `APP_ENV` | `development` | `production` refuses dev-only secrets and `COOKIE_SECURE=false`, and hides Swagger. |
-| `DATABASE_URL` | – | Connection for the API and worker, using the least-privilege `ssi_app` role. |
-| `MIGRATION_DATABASE_URL` | – | Connection for Alembic, using the schema owner role. |
-| `JWT_SECRET` | – (required, ≥ 32 chars) | Signs access tokens. |
-| `PII_HASH_SECRET` | – (required, ≥ 32 chars) | Key for pseudonymizing buyer usernames. Changing it breaks the link with buyers already stored. |
-| `ACCESS_TOKEN_MINUTES` / `REFRESH_TOKEN_DAYS` | `15` / `7` | Session lifetimes. |
-| `COOKIE_SECURE` | `true` | Send the refresh cookie over HTTPS only. Set `false` only for a local http demo. |
-| `REPORT_TIMEZONE` | `America/Sao_Paulo` | Time zone used to group sales by calendar day. |
-| `CORS_ORIGINS` | `["http://localhost:8080", "http://localhost:5173"]` | Browser origins allowed to call the API directly. |
-| `MAX_UPLOAD_MB` / `MAX_UPLOAD_ROWS` | `5` / `50000` | Upload limits. |
-| `LOGIN_RATE_LIMIT` / `LOGIN_RATE_WINDOW_SECONDS` | `5` / `60` | Login, register and accept-invite attempts per client IP. |
-| `UPLOAD_RATE_LIMIT` / `UPLOAD_RATE_WINDOW_SECONDS` | `10` / `3600` | Limit per client IP, applied separately to uploads, AI summaries, Shopee syncs and invitations. |
-| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | The only proxy address whose `X-Forwarded-For` header is trusted. Compose sets it to nginx's address. |
-| `SEED_DEMO_DATA` | `true` (compose) | Load the fake demo shop on first start. |
-| `ANTHROPIC_API_KEY` | empty | Enables the AI weekly summary. |
-| `SHOPEE_PARTNER_ID`, `SHOPEE_PARTNER_KEY`, `TOKEN_ENCRYPTION_KEY` | empty | Enable the Shopee integration. All three are required. |
-| `SHOPEE_API_HOST` | Shopee test environment | Production: `https://partner.shopeemobile.com`. |
-| `SHOPEE_REDIRECT_URL` | `http://localhost:8080/api/shopee/callback` | Must match the URL registered on the Shopee console. |
-| `SHOPEE_SYNC_INTERVAL_MINUTES` / `SHOPEE_BACKFILL_DAYS` | `30` / `90` | Scheduled sync interval and first-sync history. |
-| `SHOPEE_AUTH_HOST` | same as `SHOPEE_API_HOST` | Host of the browser authorization page (only the demo mode changes it). |
-| `SHOPEE_PUSH_URL` / `SHOPEE_PUSH_KEY` | empty | Enable push notifications. The URL must match the one registered on Shopee exactly. |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` | empty / `587` | Enable e-mail (invitations and the weekly summary). |
-| `SMTP_SECURITY` | `starttls` | `starttls`, `ssl` or `none` (`none` is refused in production). |
-| `APP_BASE_URL` | `http://localhost:8080` | Public address used in e-mailed links. |
-| `WEB_PORT` | `8080` | Host port of the web app (compose only). |
-
-### Local development without Docker
-
-```bash
-docker run -d --name ssi-db -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=shopee_insights_test -p 5433:5432 postgres:16-alpine
-
-cd backend
-python3.12 -m venv .venv && . .venv/bin/activate
-pip install -r requirements-dev.txt
-export DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5433/shopee_insights_test
-export MIGRATION_DATABASE_URL=$DATABASE_URL COOKIE_SECURE=false
-export JWT_SECRET=$(python -c "import secrets;print(secrets.token_urlsafe(48))")
-export PII_HASH_SECRET=$(python -c "import secrets;print(secrets.token_urlsafe(48))")
-alembic upgrade head && python -m app.seed
-uvicorn app.main:app --reload
-
-cd ../frontend && npm ci && npm run dev   # http://localhost:5173 (proxies /api to :8000)
-```
-
 ## Verification
 
 One command checks the whole project. CI runs the same script on every push.
@@ -547,6 +588,20 @@ Design choices behind these numbers:
 
 CI runs the benchmark with 50,000 orders and a 1.5 s budget, because shared runners
 are slower and noisier.
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| Docker Desktop says **"WSL not installed"** (Windows) | Open PowerShell as administrator, run `wsl --install`, restart the computer, then open Docker Desktop again. |
+| `wsl --install` says virtualization is disabled | Enable virtualization (Intel VT-x / AMD-V) in the computer's BIOS or UEFI settings. |
+| `start.bat` says Docker is not running | Open Docker Desktop and wait for **Engine running** in the bottom-left corner. |
+| Windows shows "Windows protected your PC" for `start.bat` | Click **More info → Run anyway**. It appears for any downloaded script. |
+| `port is already allocated` | Another program uses port 8080. Run with another port: `WEB_PORT=8081 docker compose up` (PowerShell: `$env:WEB_PORT=8081; docker compose up`). |
+| The first start is slow | It builds the images, 5 to 10 minutes. Later starts take seconds. |
+| Odd file errors when the project is in OneDrive | Move the folder outside OneDrive (for example `C:\projects\shopee-seller-insights`). |
+| An upload is rejected | The message lists the row and column. Exports must be `.csv` or `.xlsx` from Seller Centre, up to 5 MB and 50,000 rows. |
+| Start over with fresh demo data | `docker compose down -v`, then start again. |
 
 ## Roadmap
 
