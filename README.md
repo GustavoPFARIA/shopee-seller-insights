@@ -1,6 +1,7 @@
 # Shopee Seller Insights
 
 [![CI](https://github.com/GustavoPFARIA/shopee-seller-insights/actions/workflows/ci.yml/badge.svg)](https://github.com/GustavoPFARIA/shopee-seller-insights/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/GustavoPFARIA/shopee-seller-insights/actions/workflows/codeql.yml/badge.svg)](https://github.com/GustavoPFARIA/shopee-seller-insights/actions/workflows/codeql.yml)
 [![Release](https://img.shields.io/github/v/release/GustavoPFARIA/shopee-seller-insights)](https://github.com/GustavoPFARIA/shopee-seller-insights/releases)
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
@@ -10,7 +11,9 @@
 ![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-![Dashboard](docs/screenshots/dashboard.png)
+![Demo: dashboard with real margins and alerts, product filters (losing money, high returns), editing a product's cost and switching shops](docs/demo.gif)
+
+<sub>Real margin per product, ABC curve and alerts → filter products losing money or with high returns → edit cost and stock → switch between shops.</sub>
 
 Sales analytics for small Shopee sellers. Connect a shop through the **Shopee Open
 Platform API** or upload the order report from Seller Centre. The app then shows revenue,
@@ -568,6 +571,12 @@ Next:
    units, not in money).
 3. Validation of the integration against a live Shopee shop (it is built and tested
    against the documented API and a faithful fake, see SECURITY.md).
+
+## Documentation
+
+- [Architecture](docs/architecture.md): components, request flow, data model, Shopee sync and the LLM feature
+- [Architecture decision records](docs/adr/README.md): why PostgreSQL is the queue, how the LLM stays grounded, and more
+- [SECURITY.md](SECURITY.md): security model and known limitations
 
 ## Contributing
 
